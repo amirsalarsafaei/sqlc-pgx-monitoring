@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"github.com/amirsalarsafaei/sqlc-pgx-metrics/dbtracer"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/logger"
+	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
