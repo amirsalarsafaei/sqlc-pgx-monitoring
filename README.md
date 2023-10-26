@@ -26,7 +26,7 @@ To begin using `sqlc-pgx-metrics` in your Go project, follow these basic steps:
 
 1. Import the package:
    ```go
-   import "github.com/amirsalarsafaei/sqlc-pgx-metrics"
+   import "github.com/amirsalarsafaei/sqlc-pgx-metrics/dbtracer"
    ```
 
 2. Before creating connection or connection pool, assign dbTracer in your connection config:
