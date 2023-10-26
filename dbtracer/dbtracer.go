@@ -25,7 +25,8 @@ type dbTracer struct {
 
 func NewDBTracer(logger logger.Logger, logLevel logger.LogLevel, registerer prometheus.Registerer) pgx.QueryTracer {
 	queryTiming := prometheustools.NewHistogram("sqlc_query_timing", "sqlc query timings",
-		[]float64{0.001, 0.005, 0.01, 0.025, 0.050, 0.100, 0.150, 0.200, 0.300, 0.500, 0.750, 1.0}, registerer)
+		[]float64{0.001, 0.005, 0.01, 0.025, 0.050, 0.100, 0.150, 0.200, 0.300, 0.500, 0.750, 1.0}, registerer,
+		"query_name", "status")
 
 	return &dbTracer{
 		logger:      logger,
