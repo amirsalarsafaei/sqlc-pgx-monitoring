@@ -93,7 +93,7 @@ func main() {
 		}
 		time.Sleep(time.Duration(rand.Intn(3)) * time.Second)
 		_, err = querier.ExampleQuery2(ctx, pool, pgtype.Text{
-			String: "basdf",
+			String: randomString(30),
 			Valid:  true,
 		})
 		if err != nil {
