@@ -6,10 +6,11 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/logger"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/prometheustools"
 	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/amirsalarsafaei/sqlc-pgx-metrics/logger"
+	"github.com/amirsalarsafaei/sqlc-pgx-metrics/prometheustools"
 )
 
 // used code from https://github.com/jackc/pgx-logrus
