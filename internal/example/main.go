@@ -7,11 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/amirsalarsafaei/sqlc-pgx-metrics/internal/example/db"
 	"github.com/amirsalarsafaei/sqlc-pgx-metrics/internal/example/db/entities/exampletable"
 	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
-	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func getPrometheusServer(port int) *http.Server {

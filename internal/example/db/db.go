@@ -4,12 +4,13 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/dbtracer"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
+
+	"github.com/amirsalarsafaei/sqlc-pgx-metrics/dbtracer"
+	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
 )
 
 type DBConfig struct {
