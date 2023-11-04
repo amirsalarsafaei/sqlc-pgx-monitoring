@@ -9,8 +9,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/dbtracer"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/dbtracer"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
 )
 
 type DBConfig struct {

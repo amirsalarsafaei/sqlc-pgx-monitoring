@@ -1,4 +1,4 @@
-module github.com/amirsalarsafaei/sqlc-pgx-metrics
+module github.com/amirsalarsafaei/sqlc-pgx-monitoring
 
 go 1.20
 

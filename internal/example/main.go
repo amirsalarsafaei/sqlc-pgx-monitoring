@@ -10,9 +10,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/internal/example/db"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/internal/example/db/entities/exampletable"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db/entities/exampletable"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
 )
 
 func getPrometheusServer(port int) *http.Server {

@@ -9,8 +9,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/logger"
-	"github.com/amirsalarsafaei/sqlc-pgx-metrics/pkg/prometheustools"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/prometheustools"
 )
 
 // used code from https://github.com/jackc/pgx-logrus
