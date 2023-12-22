@@ -3,7 +3,6 @@ package dbtracer
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,9 +22,23 @@ type dbTracer struct {
 	queryTiming prometheustools.Observer
 }
 
-func NewDBTracer(logger logger.Logger, logLevel logger.LogLevel, registerer prometheus.Registerer) pgx.QueryTracer {
-	queryTiming := prometheustools.NewHistogram("sqlc_query_timing", "sqlc query timings",
-		[]float64{0.001, 0.005, 0.01, 0.025, 0.050, 0.100, 0.150, 0.200, 0.300, 0.500, 0.750, 1.0}, registerer,
+func NewDBTracer(logger logger.Logger, logLevel logger.LogLevel, registerer prometheus.Registerer,
+	opts ...Option) pgx.QueryTracer {
+
+	optCtx := optionCtx{
+		name:    "sqlc_query_timing",
+		help:    "sqlc query timings",
+		buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.050, 0.100, 0.150, 0.200, 0.300, 0.500, 0.750, 1.0},
+	}
+	for _, opt := range opts {
+		opt(&optCtx)
+	}
+
+	queryTiming := prometheustools.NewHistogram(
+		optCtx.name,
+		optCtx.help,
+		optCtx.buckets,
+		registerer,
 		"query_name", "status")
 
 	return &dbTracer{
@@ -276,14 +289,4 @@ func (dt *dbTracer) log(ctx context.Context, conn *pgx.Conn, lvl logger.LogLevel
 	}
 
 	dt.logger.Log(ctx, lvl, msg, data)
-}
-
-// sqlc queries are declared after a sql command in the form of -- name: TheQueryName :type
-var queryNameRegex = regexp.MustCompile(`\A--\s+name:\s+(?P<name>\w+)`)
-
-func queryNameFromSQL(sql string) string {
-	if !queryNameRegex.MatchString(sql) {
-		return "unknown"
-	}
-	return queryNameRegex.FindStringSubmatch(sql)[1]
 }
