@@ -34,16 +34,14 @@ To begin using `sqlc-pgx-monitoring` in your Go project, follow these basic step
    ### pgx.Conn
    ```go
    connConfig.Tracer = dbtracer.NewDBTracer(
-        logger.NewLogger(logrus.New()),
-        level,
+        logrus.New(),
         prometheus.DefaultRegisterer,
    )
    ```
    ### pgxpool.Pool
    ```go
    poolConfig.ConnConfig.Tracer = dbtracer.NewDBTracer(
-       logger.NewLogger(logrus.New()),
-       level,
+       logrus.New(),
        prometheus.DefaultRegisterer,
    )
    ```
