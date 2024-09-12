@@ -2,13 +2,15 @@ package dbtracer
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/prometheustools"
 )
 
@@ -16,19 +18,21 @@ import (
 
 // dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
 type dbTracer struct {
-	logger   logger.Logger
-	logLevel logger.LogLevel
-
+	logger      *logrus.Logger
 	queryTiming prometheustools.Observer
+	shouldLog   ShouldLog
 }
 
-func NewDBTracer(logger logger.Logger, logLevel logger.LogLevel, registerer prometheus.Registerer,
-	opts ...Option) pgx.QueryTracer {
-
+func NewDBTracer(logger *logrus.Logger, registerer prometheus.Registerer,
+	opts ...Option,
+) pgx.QueryTracer {
 	optCtx := optionCtx{
 		name:    "sqlc_query_timing",
-		help:    "sqlc query timings",
+		help:    "database query timings by sqlc query name and status",
 		buckets: []float64{0.001, 0.005, 0.01, 0.025, 0.050, 0.100, 0.150, 0.200, 0.300, 0.500, 0.750, 1.0},
+		shouldLog: func(_ error) bool {
+			return true
+		},
 	}
 	for _, opt := range opts {
 		opt(&optCtx)
@@ -43,7 +47,6 @@ func NewDBTracer(logger logger.Logger, logLevel logger.LogLevel, registerer prom
 
 	return &dbTracer{
 		logger:      logger,
-		logLevel:    logLevel,
 		queryTiming: queryTiming,
 	}
 }
@@ -52,11 +55,11 @@ type ctxKey int
 
 const (
 	_ ctxKey = iota
-	tracelogQueryCtxKey
-	tracelogBatchCtxKey
-	tracelogCopyFromCtxKey
-	tracelogConnectCtxKey
-	tracelogPrepareCtxKey
+	dbTracerQueryCtxKey
+	dbTracerBatchCtxKey
+	dbTracerCopyFromCtxKey
+	dbTracerConnectCtxKey
+	dbTracerPrepareCtxKey
 )
 
 type traceQueryData struct {
@@ -67,7 +70,7 @@ type traceQueryData struct {
 }
 
 func (dt *dbTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
-	return context.WithValue(ctx, tracelogQueryCtxKey, &traceQueryData{
+	return context.WithValue(ctx, dbTracerQueryCtxKey, &traceQueryData{
 		startTime: time.Now(),
 		sql:       data.SQL,
 		args:      data.Args,
@@ -76,7 +79,7 @@ func (dt *dbTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.T
 }
 
 func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
-	queryData := ctx.Value(tracelogQueryCtxKey).(*traceQueryData)
+	queryData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
 
 	endTime := time.Now()
 	interval := endTime.Sub(queryData.startTime)
@@ -85,20 +88,27 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		"query_name": queryData.queryName,
 		"status":     "success",
 	}
-	defer dt.queryTiming.With(labels).Observe(interval.Seconds())
+	defer func(labels map[string]string, interval time.Duration) {
+		dt.queryTiming.With(labels).Observe(interval.Seconds())
+	}(labels, interval)
+
+	log := dt.logger.WithContext(ctx).WithFields(
+		logrus.Fields{
+			"sql":  queryData.sql,
+			"args": logQueryArgs(queryData.args),
+			"time": interval,
+			"pid":  extractConnectionID(conn),
+		},
+	)
 
 	if data.Err != nil {
 		labels["status"] = "error"
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.log(ctx, conn, logger.LogLevelError, "Query", map[string]any{"sql": queryData.sql,
-				"args": logger.LogQueryArgs(queryData.args), "err": data.Err, "time": interval})
-		}
-		return
-	}
 
-	if dt.shouldLog(logger.LogLevelInfo) {
-		dt.log(ctx, conn, logger.LogLevelInfo, "Query", map[string]any{"sql": queryData.sql,
-			"args": logger.LogQueryArgs(queryData.args), "time": interval, "commandTag": data.CommandTag.String()})
+		if dt.shouldLog(data.Err) {
+			log.Errorf("Query: %s", queryData.queryName)
+		}
+	} else {
+		log.WithField("commandTag", data.CommandTag.String()).Infof("Query: %s", queryData.queryName)
 	}
 }
 
@@ -108,46 +118,61 @@ type traceBatchData struct {
 }
 
 func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	return context.WithValue(ctx, tracelogBatchCtxKey, &traceBatchData{
+	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
 		startTime: time.Now(),
 	})
 }
 
 func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchQueryData) {
-	queryData := ctx.Value(tracelogBatchCtxKey).(*traceBatchData)
+	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
 	queryData.queryName = queryNameFromSQL(data.SQL)
 
-	if data.Err != nil {
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.log(ctx, conn, logger.LogLevelError, "BatchQuery", map[string]any{"sql": data.SQL,
-				"args": logger.LogQueryArgs(data.Args), "err": data.Err})
-		}
-		return
-	}
+	log := dt.logger.WithContext(ctx).WithFields(
+		logrus.Fields{
+			"sql":  data.SQL,
+			"args": logQueryArgs(data.Args),
+			"pid":  extractConnectionID(conn),
+		},
+	)
 
-	if dt.shouldLog(logger.LogLevelInfo) {
-		dt.log(ctx, conn, logger.LogLevelInfo, "BatchQuery", map[string]any{"sql": data.SQL,
-			"args": logger.LogQueryArgs(data.Args), "commandTag": data.CommandTag.String()})
+	if data.Err != nil {
+		if dt.shouldLog(data.Err) {
+			log.Error("Query")
+		}
+	} else {
+		log.WithField("commandTag", data.CommandTag.String()).Info("Query")
 	}
 }
 
 func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchEndData) {
-	queryData := ctx.Value(tracelogBatchCtxKey).(*traceBatchData)
+	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
 
 	endTime := time.Now()
 	interval := endTime.Sub(queryData.startTime)
 
+	labels := map[string]string{
+		"query_name": queryData.queryName,
+		"status":     "success",
+	}
+	defer func(labels map[string]string, interval time.Duration) {
+		dt.queryTiming.With(labels).Observe(interval.Seconds())
+	}(labels, interval)
+
+	log := dt.logger.WithContext(ctx).WithFields(
+		logrus.Fields{
+			"interval": interval,
+			"pid":      extractConnectionID(conn),
+		},
+	)
+
 	if data.Err != nil {
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.log(ctx, conn, logger.LogLevelError,
-				"BatchClose", map[string]any{"err": data.Err, "time": interval})
+		labels["status"] = "error"
+		if dt.shouldLog(data.Err) {
+			log.Errorf("Query: %s", queryData.queryName)
 		}
-		return
 	}
 
-	if dt.shouldLog(logger.LogLevelInfo) {
-		dt.log(ctx, conn, logger.LogLevelInfo, "BatchClose", map[string]any{"time": interval})
-	}
+	log.Info("Query")
 }
 
 type traceCopyFromData struct {
@@ -157,8 +182,9 @@ type traceCopyFromData struct {
 }
 
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context,
-	_ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
-	return context.WithValue(ctx, tracelogCopyFromCtxKey, &traceCopyFromData{
+	_ *pgx.Conn, data pgx.TraceCopyFromStartData,
+) context.Context {
+	return context.WithValue(ctx, dbTracerCopyFromCtxKey, &traceCopyFromData{
 		startTime:   time.Now(),
 		TableName:   data.TableName,
 		ColumnNames: data.ColumnNames,
@@ -166,30 +192,26 @@ func (dt *dbTracer) TraceCopyFromStart(ctx context.Context,
 }
 
 func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceCopyFromEndData) {
-	copyFromData := ctx.Value(tracelogCopyFromCtxKey).(*traceCopyFromData)
+	copyFromData := ctx.Value(dbTracerCopyFromCtxKey).(*traceCopyFromData)
 
 	endTime := time.Now()
 	interval := endTime.Sub(copyFromData.startTime)
 
-	labels := map[string]string{
-		"query_name": fmt.Sprintf("copyFrom_%s", copyFromData.TableName),
-		"status":     "success",
-	}
-	defer dt.queryTiming.With(labels).Observe(interval.Seconds())
+	log := dt.logger.WithContext(ctx).WithFields(
+		logrus.Fields{
+			"tableName":   copyFromData.TableName,
+			"columnNames": copyFromData.ColumnNames,
+			"time":        interval,
+			"pid":         extractConnectionID(conn),
+		},
+	)
 
 	if data.Err != nil {
-		labels["status"] = "error"
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.log(ctx, conn, logger.LogLevelError, "CopyFrom", map[string]any{"tableName": copyFromData.TableName,
-				"columnNames": copyFromData.ColumnNames, "err": data.Err, "time": interval})
+		if dt.shouldLog(data.Err) {
+			log.WithError(data.Err).Error("CopyFrom")
 		}
-		return
-	}
-
-	if dt.shouldLog(logger.LogLevelInfo) {
-		dt.log(ctx, conn, logger.LogLevelInfo, "CopyFrom", map[string]any{"tableName": copyFromData.TableName,
-			"columnNames": copyFromData.ColumnNames, "err": data.Err, "time": interval,
-			"rowCount": data.CommandTag.RowsAffected()})
+	} else {
+		log.WithField("rowCount", data.CommandTag.RowsAffected()).Info("CopyFrom")
 	}
 }
 
@@ -199,40 +221,36 @@ type traceConnectData struct {
 }
 
 func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
-	return context.WithValue(ctx, tracelogConnectCtxKey, &traceConnectData{
+	return context.WithValue(ctx, dbTracerConnectCtxKey, &traceConnectData{
 		startTime:  time.Now(),
 		connConfig: data.ConnConfig,
 	})
 }
 
 func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEndData) {
-	connectData := ctx.Value(tracelogConnectCtxKey).(*traceConnectData)
+	connectData := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
 
 	endTime := time.Now()
 	interval := endTime.Sub(connectData.startTime)
 
+	log := dt.logger.WithContext(ctx).
+		WithFields(logrus.Fields{
+			"host":     connectData.connConfig.Host,
+			"port":     connectData.connConfig.Port,
+			"database": connectData.connConfig.Database,
+			"time":     interval,
+		},
+		)
+
 	if data.Err != nil {
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.logger.Log(ctx, logger.LogLevelError, "Connect", map[string]any{
-				"host":     connectData.connConfig.Host,
-				"port":     connectData.connConfig.Port,
-				"database": connectData.connConfig.Database,
-				"time":     interval,
-				"err":      data.Err,
-			})
+		if dt.shouldLog(data.Err) {
+			log.WithError(data.Err).Error("database connect")
 		}
 		return
 	}
 
 	if data.Conn != nil {
-		if dt.shouldLog(logger.LogLevelInfo) {
-			dt.log(ctx, data.Conn, logger.LogLevelInfo, "Connect", map[string]any{
-				"host":     connectData.connConfig.Host,
-				"port":     connectData.connConfig.Port,
-				"database": connectData.connConfig.Database,
-				"time":     interval,
-			})
-		}
+		log.Info("database connect")
 	}
 }
 
@@ -243,8 +261,9 @@ type tracePrepareData struct {
 }
 
 func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn,
-	data pgx.TracePrepareStartData) context.Context {
-	return context.WithValue(ctx, tracelogPrepareCtxKey, &tracePrepareData{
+	data pgx.TracePrepareStartData,
+) context.Context {
+	return context.WithValue(ctx, dbTracerPrepareCtxKey, &tracePrepareData{
 		startTime: time.Now(),
 		name:      data.Name,
 		sql:       data.SQL,
@@ -252,41 +271,68 @@ func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn,
 }
 
 func (dt *dbTracer) TracePrepareEnd(ctx context.Context, conn *pgx.Conn, data pgx.TracePrepareEndData) {
-	prepareData := ctx.Value(tracelogPrepareCtxKey).(*tracePrepareData)
+	prepareData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
 
 	endTime := time.Now()
 	interval := endTime.Sub(prepareData.startTime)
 
+	log := dt.logger.WithContext(ctx).
+		WithFields(logrus.Fields{
+			"name": prepareData.name,
+			"sql":  prepareData.sql,
+			"time": interval,
+			"pid":  extractConnectionID(conn),
+		},
+		)
+
 	if data.Err != nil {
-		if dt.shouldLog(logger.LogLevelError) {
-			dt.log(ctx, conn, logger.LogLevelError, "Prepare", map[string]any{"name": prepareData.name,
-				"sql": prepareData.sql, "err": data.Err, "time": interval})
+		if dt.shouldLog(data.Err) {
+			log.WithError(data.Err).Error("Prepare")
 		}
-		return
-	}
-
-	if dt.shouldLog(logger.LogLevelInfo) {
-		dt.log(ctx, conn, logger.LogLevelInfo, "Prepare", map[string]any{"name": prepareData.name,
-			"sql": prepareData.sql, "time": interval, "alreadyPrepared": data.AlreadyPrepared})
+	} else {
+		log.WithField("alreadyPrepared", data.AlreadyPrepared).Info("Prepare")
 	}
 }
 
-func (dt *dbTracer) shouldLog(lvl logger.LogLevel) bool {
-	return dt.logLevel >= lvl
+func logQueryArgs(args []any) []any {
+	logArgs := make([]any, 0, len(args))
+
+	for _, a := range args {
+		switch v := a.(type) {
+		case []byte:
+			if len(v) < 64 {
+				a = hex.EncodeToString(v)
+			} else {
+				a = fmt.Sprintf("%x (truncated %d bytes)", v[:64], len(v)-64)
+			}
+		case string:
+			if len(v) > 64 {
+				var l int
+				for w := 0; l < 64; l += w {
+					_, w = utf8.DecodeRuneInString(v[l:])
+				}
+
+				if len(v) > l {
+					a = fmt.Sprintf("%s (truncated %d bytes)", v[:l], len(v)-l)
+				}
+			}
+		}
+
+		logArgs = append(logArgs, a)
+	}
+
+	return logArgs
 }
 
-func (dt *dbTracer) log(ctx context.Context, conn *pgx.Conn, lvl logger.LogLevel, msg string, data map[string]any) {
-	if data == nil {
-		data = map[string]any{}
+func extractConnectionID(conn *pgx.Conn) uint32 {
+	if conn == nil {
+		return 0
 	}
 
 	pgConn := conn.PgConn()
 	if pgConn != nil {
 		pid := pgConn.PID()
-		if pid != 0 {
-			data["pid"] = pid
-		}
+		return pid
 	}
-
-	dt.logger.Log(ctx, lvl, msg, data)
+	return 0
 }

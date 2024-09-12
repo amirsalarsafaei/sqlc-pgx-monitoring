@@ -1,9 +1,12 @@
 package dbtracer
 
+type ShouldLog func(err error) bool
+
 type optionCtx struct {
-	name    string
-	help    string
-	buckets []float64
+	name      string
+	help      string
+	buckets   []float64
+	shouldLog ShouldLog
 }
 
 type Option func(*optionCtx)
@@ -23,5 +26,11 @@ func WithName(name string) Option {
 func WithHelp(help string) Option {
 	return func(optCtx *optionCtx) {
 		optCtx.help = help
+	}
+}
+
+func WithShouldLog(shouldLog ShouldLog) Option {
+	return func(oc *optionCtx) {
+		oc.shouldLog = shouldLog
 	}
 }
