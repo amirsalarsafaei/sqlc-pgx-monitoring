@@ -10,7 +10,6 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/dbtracer"
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
 )
 
 type DBConfig struct {
@@ -21,7 +20,7 @@ type DBConfig struct {
 	Name string
 }
 
-func GetConnectionPool(ctx context.Context, dbConf DBConfig, level logger.LogLevel) (*pgxpool.Pool, error) {
+func GetConnectionPool(ctx context.Context, dbConf DBConfig) (*pgxpool.Pool, error) {
 	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
 	)
@@ -31,8 +30,7 @@ func GetConnectionPool(ctx context.Context, dbConf DBConfig, level logger.LogLev
 	}
 
 	poolConfig.ConnConfig.Tracer = dbtracer.NewDBTracer(
-		logger.NewLogger(logrus.New()),
-		level,
+		logrus.New(),
 		prometheus.DefaultRegisterer,
 	)
 
@@ -44,7 +42,7 @@ func GetConnectionPool(ctx context.Context, dbConf DBConfig, level logger.LogLev
 	return pool, pool.Ping(ctx)
 }
 
-func GetConnection(ctx context.Context, dbConf DBConfig, level logger.LogLevel) (*pgx.Conn, error) {
+func GetConnection(ctx context.Context, dbConf DBConfig) (*pgx.Conn, error) {
 	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
 	)
@@ -54,8 +52,7 @@ func GetConnection(ctx context.Context, dbConf DBConfig, level logger.LogLevel) 
 	}
 
 	connConfig.Tracer = dbtracer.NewDBTracer(
-		logger.NewLogger(logrus.New()),
-		level,
+		logrus.New(),
 		prometheus.DefaultRegisterer,
 	)
 

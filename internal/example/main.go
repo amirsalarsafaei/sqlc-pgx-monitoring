@@ -12,7 +12,6 @@ import (
 
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db"
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db/entities/exampletable"
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/pkg/logger"
 )
 
 func getPrometheusServer(port int) *http.Server {
@@ -57,8 +56,10 @@ func main() {
 			Port: "5432",
 			Name: "example_db",
 		},
-		logger.LogLevelInfo,
 	)
+	if err != nil {
+		panic(err)
+	}
 
 	querier := exampletable.New()
 	exampleRows, err := querier.ExampleQuery(ctx, pool, pgtype.Text{
