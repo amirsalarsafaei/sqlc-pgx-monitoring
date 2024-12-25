@@ -336,7 +336,7 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	})
 }
 
-func (s *DBTracerSuite) TestTraceQueryEnd_Error() {
+func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 	s.tracer.EXPECT().
 		Start(s.ctx, "postgresql.query").
 		Return(s.ctx, s.span)
