@@ -292,7 +292,7 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 }
 
 func (s *DBTracerSuite) TestTracePrepareWithDuration() {
-	prepareSQL := "SELECT * FROM users WHERE id = $1"
+	prepareSQL := s.defaultQuerySQL
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
@@ -304,6 +304,8 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 			attribute.String("db.name", s.defaultDBName),
 			attribute.String("db.operation", "prepare"),
 			attribute.String("db.prepared_statement_name", stmtName),
+			attribute.String("db.query_name", "get_users"),
+			attribute.String("db.query_type", "one"),
 		).
 		Return()
 
