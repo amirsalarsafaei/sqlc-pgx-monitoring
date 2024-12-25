@@ -5,13 +5,13 @@ name: Go
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "**" ]  # Run on all branches
   pull_request:
-    branches: [ "master" ]
+    branches: [ "**" ]  # Run on PRs targeting any branch
 
 jobs:
 
-  build:
+  test:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
@@ -19,7 +19,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.22'
+        go-version: '1.23'
 
-    - name: Build
-      run: go build -v ./...
+    - name: Test
+      run: go test ./...
