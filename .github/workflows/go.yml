@@ -24,7 +24,8 @@ jobs:
     - name: Test with Coverage
       run: |
         go test -race -coverprofile=coverage.txt -covermode=atomic ./...
-        grep -v -E "mock_.*\.go|internal/example" coverage.txt > coverage.txt
+        grep -v -E "mock_.*\.go|internal/example" coverage.txt > coverage.out
+        rm -rf coverage.txt
 
     - name: Upload coverage reports to Codecov
       uses: codecov/codecov-action@v5
