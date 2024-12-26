@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/suite"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 
 	mockmetric "github.com/amirsalarsafaei/sqlc-pgx-monitoring/mocks/go.opentelemetry.io/otel/metric"
 	mocktracer "github.com/amirsalarsafaei/sqlc-pgx-monitoring/mocks/go.opentelemetry.io/otel/trace"
@@ -34,6 +35,18 @@ type DBTracerSuite struct {
 	dbTracer        Tracer
 	defaultDBName   string
 	defaultQuerySQL string
+}
+
+// matchAttributes creates a matcher function for metric.WithAttributes
+func (s *DBTracerSuite) matchAttributes(expected ...attribute.KeyValue) interface{} {
+	return mock.MatchedBy(func(actual interface{}) bool {
+		opt, ok := actual.(metric.MeasurementOption)
+		if !ok {
+			return false
+		}
+
+		return s.Equal(metric.WithAttributes(expected...), opt)
+	})
 }
 
 func TestDBTracerSuite(t *testing.T) {
@@ -188,7 +201,12 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 		Return()
 
 	s.histogram.EXPECT().
-		Record(ctx, mock.AnythingOfType("float64"), mock.Anything).
+		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
+			attribute.String("operation", "query"),
+			attribute.String("query_name", "get_users"),
+			attribute.String("query_type", "one"),
+			attribute.Bool("error", false),
+		)).
 		Return()
 
 	s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
@@ -333,6 +351,245 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 
 	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
 		AlreadyPrepared: false,
+	})
+}
+
+func (s *DBTracerSuite) TestTraceConnectSuccess() {
+	connConfig := &pgx.ConnConfig{}
+
+	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
+		ConnConfig: connConfig,
+	})
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
+			attribute.String("operation", "connect"),
+			attribute.Bool("error", false),
+		)).
+		Return()
+
+	time.Sleep(50 * time.Millisecond)
+
+	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
+		Conn: s.pgxConn,
+		Err:  nil,
+	})
+}
+
+func (s *DBTracerSuite) TestTraceConnectError() {
+	connConfig := &pgx.ConnConfig{}
+	expectedErr := errors.New("connection failed")
+
+	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
+		ConnConfig: connConfig,
+	})
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
+			attribute.String("operation", "connect"),
+			attribute.Bool("error", true),
+		)).
+		Return()
+
+	s.shouldLog.EXPECT().
+		Execute(expectedErr).
+		Return(true)
+
+	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
+		Conn: nil,
+		Err:  expectedErr,
+	})
+}
+
+func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
+	tableName := pgx.Identifier{"users"}
+	columnNames := []string{"id", "name"}
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.copy_from").
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.operation", "copy"),
+			attribute.String("db.table", "\"users\""),
+		).
+		Return()
+
+	ctx := s.dbTracer.TraceCopyFromStart(s.ctx, s.pgxConn, pgx.TraceCopyFromStartData{
+		TableName:   tableName,
+		ColumnNames: columnNames,
+	})
+
+	s.span.EXPECT().
+		End().
+		Return()
+
+	s.span.EXPECT().
+		SetStatus(codes.Ok, "").
+		Return()
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
+			attribute.String("operation", "copy"),
+			attribute.String("table", "\"users\""),
+			attribute.Bool("error", false),
+		)).
+		Return()
+
+	s.dbTracer.TraceCopyFromEnd(ctx, s.pgxConn, pgx.TraceCopyFromEndData{
+		CommandTag: pgconn.CommandTag{},
+		Err:        nil,
+	})
+}
+
+func (s *DBTracerSuite) TestTraceCopyFromError() {
+	tableName := pgx.Identifier{"users"}
+	columnNames := []string{"id", "name"}
+	expectedErr := errors.New("copy failed")
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.copy_from").
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.operation", "copy"),
+			attribute.String("db.table", "\"users\""),
+		).
+		Return()
+	ctx := s.dbTracer.TraceCopyFromStart(s.ctx, s.pgxConn, pgx.TraceCopyFromStartData{
+		TableName:   tableName,
+		ColumnNames: columnNames,
+	})
+
+	s.span.EXPECT().
+		End().
+		Return()
+
+	s.span.EXPECT().
+		SetStatus(codes.Error, expectedErr.Error()).
+		Return()
+
+	s.span.EXPECT().
+		RecordError(expectedErr).
+		Return()
+
+	s.shouldLog.EXPECT().
+		Execute(expectedErr).
+		Return(true)
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
+			attribute.String("operation", "copy"),
+			attribute.String("table", "\"users\""),
+			attribute.Bool("error", true),
+		)).
+		Return()
+
+	s.dbTracer.TraceCopyFromEnd(ctx, s.pgxConn, pgx.TraceCopyFromEndData{
+		CommandTag: pgconn.CommandTag{},
+		Err:        expectedErr,
+	})
+}
+
+func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
+	stmtName := "get_user_by_id"
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.prepare").
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.operation", "prepare"),
+			attribute.String("db.prepared_statement_name", stmtName),
+			attribute.String("db.query_name", "get_users"),
+			attribute.String("db.query_type", "one"),
+		).
+		Return()
+
+	ctx := s.dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
+		Name: stmtName,
+		SQL:  s.defaultQuerySQL,
+	})
+
+	s.span.EXPECT().
+		End().
+		Return()
+
+	s.span.EXPECT().
+		SetStatus(codes.Ok, "").
+		Return()
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
+			attribute.String("operation", "prepare"),
+			attribute.String("statement_name", stmtName),
+			attribute.String("query_name", "get_users"),
+			attribute.String("query_type", "one"),
+			attribute.Bool("error", false),
+		)).
+		Return()
+
+	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
+		AlreadyPrepared: true,
+	})
+}
+
+func (s *DBTracerSuite) TestTracePrepareError() {
+	stmtName := "get_user_by_id"
+	expectedErr := errors.New("prepare failed")
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.prepare").
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.operation", "prepare"),
+			attribute.String("db.prepared_statement_name", stmtName),
+			attribute.String("db.query_name", "get_users"),
+			attribute.String("db.query_type", "one"),
+		).
+		Return()
+
+	ctx := s.dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
+		Name: stmtName,
+		SQL:  s.defaultQuerySQL,
+	})
+
+	s.span.EXPECT().
+		End().
+		Return()
+
+	s.span.EXPECT().
+		SetStatus(codes.Error, expectedErr.Error()).
+		Return()
+
+	s.span.EXPECT().
+		RecordError(expectedErr).
+		Return()
+
+	s.shouldLog.EXPECT().
+		Execute(expectedErr).
+		Return(true)
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
+			attribute.String("operation", "prepare"),
+			attribute.String("statement_name", stmtName),
+			attribute.String("query_name", "get_users"),
+			attribute.String("query_type", "one"),
+			attribute.Bool("error", true),
+		)).
+		Return()
+
+	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
+		Err: expectedErr,
 	})
 }
 

@@ -36,6 +36,8 @@ func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn, data pgx
 		statementName: data.Name,
 		span:          span,
 		sql:           data.SQL,
+		queryName:     queryName,
+		queryType:     queryType,
 	})
 }
 
