@@ -8,8 +8,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db"
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db/entities/exampletable"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/examples/db"
+	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/examples/db/entities/exampletable"
 )
 
 // func setupMetrics() (*prometheus.Exporter, error) {

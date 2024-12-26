@@ -1,0 +1,15 @@
+coverage:
+  status:
+    project:
+      default:
+        paths:
+          - "dbtracer/"
+    patch:
+      default:
+        paths:
+          - "dbtracer/"
+
+ignore:
+  - "**/mock_*.go"
+  - "examples/"
+
