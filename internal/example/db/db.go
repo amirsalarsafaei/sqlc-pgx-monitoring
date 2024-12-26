@@ -6,8 +6,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/sirupsen/logrus"
 
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/dbtracer"
 )
@@ -26,13 +24,17 @@ func GetConnectionPool(ctx context.Context, dbConf DBConfig) (*pgxpool.Pool, err
 	)
 	poolConfig, err := pgxpool.ParseConfig(pgURL)
 	if err != nil {
-		return nil, fmt.Errorf("parsing postgres URI: %v", err.Error())
+		return nil, fmt.Errorf("parsing postgres URI: %w", err)
 	}
 
-	poolConfig.ConnConfig.Tracer = dbtracer.NewDBTracer(
-		logrus.New(),
-		prometheus.DefaultRegisterer,
+	tracer, err := dbtracer.NewDBTracer(
+		"postgres",
 	)
+	if err != nil {
+		return nil, fmt.Errorf("creating tracer: %w", err)
+	}
+
+	poolConfig.ConnConfig.Tracer = tracer
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -51,10 +53,12 @@ func GetConnection(ctx context.Context, dbConf DBConfig) (*pgx.Conn, error) {
 		return nil, fmt.Errorf("parsing postgres URI: %v", err.Error())
 	}
 
-	connConfig.Tracer = dbtracer.NewDBTracer(
-		logrus.New(),
-		prometheus.DefaultRegisterer,
+	connConfig.Tracer, err = dbtracer.NewDBTracer(
+		"postgres",
 	)
+	if err != nil {
+		return nil, fmt.Errorf("creating tracer: %w", err)
+	}
 
 	conn, err := pgx.ConnectConfig(ctx, connConfig)
 	if err != nil {

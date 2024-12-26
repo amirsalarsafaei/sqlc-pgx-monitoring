@@ -1,0 +1,31 @@
+with-expecter: true
+packages:
+    github.com/amirsalarsafaei/sqlc-pgx-monitoring:
+      config:
+        recursive: True
+        filename: "mock_{{.InterfaceNameLower}}.go"
+        dir: "{{.InterfaceDir}}"
+        mockname: "{{.Mock}}{{.InterfaceName}}"
+        outpkg: "{{.PackageName}}"
+        inpackage: True
+        disable-version-string: true
+        all: true
+    go.opentelemetry.io/otel/trace:
+      interfaces:
+          Span:
+              config:
+                  with-expecter: true
+          Tracer:
+              config:
+                  with-expecter: true
+          TracerProvider:
+              config:
+                  with-expecter: true
+    go.opentelemetry.io/otel/metric:
+        config:
+            all: true
+inpackage: false
+filename: "mock_{{.InterfaceName}}.go"
+dir: "mocks/{{.PackagePath}}"
+mockname: "Mock{{.InterfaceName}}"
+

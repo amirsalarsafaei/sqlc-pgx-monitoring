@@ -4,29 +4,64 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db"
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/internal/example/db/entities/exampletable"
 )
 
-func getPrometheusServer(port int) *http.Server {
-	return &http.Server{
-		Addr:              fmt.Sprintf(":%d", port),
-		Handler:           promhttp.Handler(),
-		ReadHeaderTimeout: 100 * time.Millisecond,
-	}
-}
+// func setupMetrics() (*prometheus.Exporter, error) {
+// 	resource := resource.NewWithAttributes(
+// 		semconv.SchemaURL,
+// 		semconv.ServiceName("example-service"),
+// 		semconv.ServiceVersion("1.0.0"),
+// 	)
+//
+// 	exporter, err := prometheus.New()
+// 	if err != nil {
+// 		return nil, fmt.Errorf("failed to create prometheus exporter: %w", err)
+// 	}
+//
+// 	provider := sdkmetric.NewMeterProvider(
+// 		sdkmetric.WithResource(resource),
+// 		sdkmetric.WithReader(exporter),
+// 		sdkmetric.WithView(sdkmetric.NewView(
+// 			sdkmetric.Instrument{
+// 				Name: "*",
+// 				Kind: sdkmetric.InstrumentKindHistogram,
+// 			},
+// 			sdkmetric.Stream{
+// 				Aggregation: sdkmetric.AggregationExplicitBucketHistogram{
+// 					Boundaries: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+// 				},
+// 			},
+// 		)),
+// 	)
+//
+// 	otel.SetMeterProvider(provider)
+// 	return exporter, nil
+// }
 
-func servePrometheus(prometheusServer *http.Server) {
-	if err := prometheusServer.ListenAndServe(); err != nil {
-		panic(err)
-	}
-}
+// func startMetricsServer(exporter *prometheus.Exporter) *http.Server {
+// 	mux := http.NewServeMux()
+// 	mux.Handle("/metrics", promhttp.Handler())
+//
+// 	server := &http.Server{
+// 		Addr:              ":9000",
+// 		Handler:           mux,
+// 		ReadHeaderTimeout: 100 * time.Millisecond,
+// 	}
+//
+// 	go func() {
+// 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+// 			panic(fmt.Sprintf("metrics server error: %v", err))
+// 		}
+// 	}()
+//
+// 	return server
+// }
 
 var letterRunes = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
@@ -40,12 +75,6 @@ func randomString(length int) string {
 
 func main() {
 	ctx := context.Background()
-	err := db.Migrate("postgres://example:complex-password@localhost:5432/example_db?sslmode=disable")
-	if err != nil {
-		panic(err)
-	}
-
-	go servePrometheus(getPrometheusServer(9000))
 
 	pool, err := db.GetConnectionPool(
 		ctx,

@@ -1,14 +1,7 @@
-REVISER_VERSION := v3.3.1
 SQLC_VERSION := v1.20.0
-
-revise-imports: $(GOPATH)/bin/goimports-reviser
-	@goimports-reviser -company-prefixes "github.com/amirsalarsafaei/" ./...
 
 gen-sqlc: check-sqlc
 	sqlc generate -f ./internal/example/db/sqlc.yaml
-
-$(GOPATH)/bin/goimports-reviser:
-	@go install -v github.com/incu6us/goimports-reviser/v3@$(REVISER_VERSION)
 
 check-sqlc:
 	@if ! command -v mockery &> /dev/null; then \
