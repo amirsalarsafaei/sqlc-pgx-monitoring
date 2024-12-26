@@ -27,7 +27,7 @@
 To get started with `sqlc-pgx-monitoring`, you can simply use `go get`:
 
 ```shell
-go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.4.0
+go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.3.0
 ```
 
 ## Usage
@@ -53,6 +53,51 @@ To begin using `sqlc-pgx-monitoring` in your Go project, follow these basic step
       "database_name",
    )
    ```
+
+### Available Options
+
+The `NewDBTracer` function accepts various options to customize its behavior:
+
+#### Logging Options
+- `WithLogger(logger *slog.Logger)`: Sets a custom structured logger for query logging
+- `WithShouldLog(shouldLog ShouldLog)`: Configures when to log based on error conditions
+- `WithLogArgs(enabled bool)`: Enables/disables logging of query arguments
+- `WithLogArgsLenLimit(limit int)`: Sets maximum length for logged arguments
+
+#### Telemetry Options
+- `WithMeterProvider(mp metric.MeterProvider)`: Sets the OpenTelemetry meter provider for metrics
+- `WithTraceProvider(tp trace.TracerProvider)`: Sets the OpenTelemetry tracer provider
+- `WithLatencyHistogramConfig(name, unit, description string)`: Configures the latency histogram properties
+  ```go
+  dbtracer.NewDBTracer(
+      "database_name",
+      dbtracer.WithLatencyHistogramConfig(
+          "custom_histogram_name",
+          "ms",
+          "Custom histogram description",
+      ),
+  )
+  ```
+
+#### Example Usage
+
+```go
+logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+mp := metric.NewMeterProvider()
+tp := trace.NewTracerProvider()
+
+tracer := dbtracer.NewDBTracer(
+    "database_name",
+    dbtracer.WithLogger(logger),
+    dbtracer.WithMeterProvider(mp),
+    dbtracer.WithTraceProvider(tp),
+    dbtracer.WithLogArgs(true),
+    dbtracer.WithLogArgsLenLimit(1000),
+    dbtracer.WithShouldLog(func(err error) bool {
+        return err != nil // Only log when there's an error
+    }),
+)
+```
 
 For more information refer to the [example](internal/example)
 
