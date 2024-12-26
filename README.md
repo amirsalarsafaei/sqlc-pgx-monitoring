@@ -1,7 +1,7 @@
 # sqlc-pgx-monitoring
 
 ![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)
-[![codecov](https://codecov.io/gh/vgarvardt/sqlc-pgx-monitoring/branch/main/graph/badge.svg)](https://codecov.io/gh/vgarvardt/sqlc-pgx-monitoring)
+[![codecov](https://codecov.io/github/amirsalarsafaei/sqlc-pgx-monitoring/graph/badge.svg?token=NT5PXGLJMS)](https://codecov.io/github/amirsalarsafaei/sqlc-pgx-monitoring)
 
 `sqlc-pgx-monitoring` is a Go package that offers powerful query time monitoring and logging capabilities for applications using the popular `pgx` and `sqlc` libraries in Golang. If you want to gain insights into the performance of your PostgreSQL database queries and ensure the reliability of your application, this package is a valuable addition to your toolset.
 
