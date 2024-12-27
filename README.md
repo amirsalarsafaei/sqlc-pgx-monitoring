@@ -101,6 +101,15 @@ tracer := dbtracer.NewDBTracer(
 
 For more information refer to the [example](internal/example)
 
+
+### Tracing and Monitoring Visualization
+### Tracing
+![Tracing](./docs/tracing-1.png)
+![Tracing](./docs/tracing-2.png)
+
+### Monitoring
+![Monitoring](./docs/monitoring.png)
+
 ## License
 
 `sqlc-pgx-monitoring` is open-source software licensed under the [MIT License](LICENSE). Feel free to use, modify, and distribute it according to the terms of this license.
