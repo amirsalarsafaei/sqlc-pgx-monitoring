@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
+	"sync"
 	"testing"
 	"time"
 
@@ -70,7 +72,7 @@ func (s *DBTracerSuite) SetupTest() {
 
 	s.tracerProvider.EXPECT().
 		Tracer(mock.Anything).
-		Return(s.tracer)
+		Return(s.tracer).Maybe()
 
 	s.meterProvider.EXPECT().
 		Meter(mock.Anything).
@@ -96,33 +98,66 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 		name         string
 		databaseName string
 		opts         []Option
-		setupMocks   func(*mockmetric.MockMeterProvider, *mockmetric.MockMeter, *mockmetric.MockFloat64Histogram)
+		setupMocks   func(*mockmetric.MockMeterProvider, *mockmetric.MockMeter, *mockmetric.MockFloat64Histogram, *mocktracer.MockTracerProvider, *mocktracer.MockTracer)
 		wantErr      bool
 	}{
 		{
-			name:         "successful creation",
+			name:         "successful creation with default options",
 			databaseName: "test_db",
 			opts:         []Option{},
-			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram) {
+			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram, tp *mocktracer.MockTracerProvider, t *mocktracer.MockTracer) {
 				mp.EXPECT().
-					Meter(mock.Anything).
+					Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring").
 					Return(m)
 				m.EXPECT().
-					Float64Histogram(mock.Anything, mock.Anything, mock.Anything).
+					Float64Histogram(
+						"db_query_duration",
+						metric.WithDescription("The duration of database queries by sqlc function names"),
+						metric.WithUnit("s"),
+					).
 					Return(h, nil)
 			},
 			wantErr: false,
-		}, {
+		},
+		{
+			name:         "successful creation with custom histogram config",
+			databaseName: "test_db",
+			opts: []Option{
+				WithLatencyHistogramConfig("custom.histogram", "ms", "Custom description"),
+			},
+			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram, tp *mocktracer.MockTracerProvider, t *mocktracer.MockTracer) {
+				mp.EXPECT().
+					Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring").
+					Return(m)
+				m.EXPECT().
+					Float64Histogram(
+						"custom.histogram",
+						metric.WithDescription("Custom description"),
+						metric.WithUnit("ms"),
+					).
+					Return(h, nil)
+			},
+			wantErr: false,
+		},
+		{
 			name:         "meter creation failure",
 			databaseName: "test_db",
 			opts:         []Option{},
-			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram) {
+			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram, tp *mocktracer.MockTracerProvider, t *mocktracer.MockTracer) {
 				mp.EXPECT().
-					Meter(mock.Anything).
+					Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring").
 					Return(m)
 				m.EXPECT().
 					Float64Histogram(mock.Anything, mock.Anything, mock.Anything).
 					Return(nil, fmt.Errorf("meter creation failed"))
+			},
+			wantErr: true,
+		},
+		{
+			name:         "empty database name",
+			databaseName: "",
+			opts:         []Option{},
+			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram, tp *mocktracer.MockTracerProvider, t *mocktracer.MockTracer) {
 			},
 			wantErr: true,
 		},
@@ -133,14 +168,23 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 			mp := mockmetric.NewMockMeterProvider(s.T())
 			m := mockmetric.NewMockMeter(s.T())
 			h := mockmetric.NewMockFloat64Histogram(s.T())
+			tp := mocktracer.NewMockTracerProvider(s.T())
+			t := mocktracer.NewMockTracer(s.T())
 
-			tt.setupMocks(mp, m, h)
+			tt.setupMocks(mp, m, h, tp, t)
 
-			opts := append(tt.opts, WithMeterProvider(mp))
-			_, err := NewDBTracer(tt.databaseName, opts...)
+			opts := append(tt.opts,
+				WithMeterProvider(mp),
+				WithTraceProvider(tp),
+			)
+			tracer, err := NewDBTracer(tt.databaseName, opts...)
 
 			if tt.wantErr {
 				s.Error(err)
+				s.Nil(tracer)
+			} else {
+				s.NoError(err)
+				s.NotNil(tracer)
 			}
 		})
 	}
@@ -591,6 +635,79 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
 		Err: expectedErr,
 	})
+}
+
+func (s *DBTracerSuite) TestTraceConcurrent() {
+	numGoroutines := 10
+	var wg sync.WaitGroup
+	results := make(chan error, numGoroutines)
+
+	trigger := make(chan int)
+
+	s.tracer.EXPECT().
+		Start(mock.Anything, "postgresql.query").
+		Return(s.ctx, s.span).
+		Times(numGoroutines)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.query_name", "get_users"),
+			attribute.String("db.query_type", "one"),
+			attribute.String("db.operation", "query"),
+		).
+		Return().
+		Times(numGoroutines)
+
+	s.span.EXPECT().
+		End().
+		Return().
+		Times(numGoroutines)
+
+	s.span.EXPECT().
+		SetStatus(codes.Ok, "").
+		Return().
+		Times(numGoroutines)
+
+	s.histogram.EXPECT().
+		Record(mock.Anything, mock.AnythingOfType("float64"), mock.Anything).
+		Return().
+		Times(numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int, trigger <-chan int) {
+			defer wg.Done()
+
+			ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+				SQL:  s.defaultQuerySQL,
+				Args: []interface{}{id},
+			})
+
+			time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+
+			s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
+				CommandTag: pgconn.CommandTag{},
+				Err:        nil,
+			})
+
+			results <- nil
+		}(i, trigger)
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	close(trigger)
+	wg.Wait()
+	close(results)
+
+	var errs []error
+	for err := range results {
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	s.NoError(errors.Join(errs...), "Expected no errors in concurrent execution")
 }
 
 func (s *DBTracerSuite) TestTraceQueryEndOnError() {

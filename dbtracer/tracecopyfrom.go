@@ -20,7 +20,7 @@ type traceCopyFromData struct {
 }
 
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
-	ctx, span := dt.tracer.Start(ctx, "postgresql.copy_from")
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.copy_from")
 	span.SetAttributes(
 		attribute.String("db.name", dt.databaseName),
 		attribute.String("db.operation", "copy"),
