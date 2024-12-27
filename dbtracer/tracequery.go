@@ -24,7 +24,7 @@ type traceQueryData struct {
 
 func (dt *dbTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.tracer.Start(ctx, "postgresql.query")
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.query")
 	span.SetAttributes(
 		attribute.String("db.name", dt.databaseName),
 		attribute.String("db.query_name", queryName),

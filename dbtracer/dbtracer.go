@@ -2,6 +2,7 @@ package dbtracer
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"unicode/utf8"
@@ -11,6 +12,8 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
+
+var ErrDatabaseNameEmpty = errors.New("database name is empty")
 
 type Tracer interface {
 	pgx.BatchTracer
@@ -22,19 +25,24 @@ type Tracer interface {
 
 // dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
 type dbTracer struct {
-	logger          *slog.Logger
-	tracer          trace.Tracer
-	shouldLog       ShouldLog
-	databaseName    string
-	logArgs         bool
-	logArgsLenLimit int
-	histogram       metric.Float64Histogram
+	logger           *slog.Logger
+	shouldLog        ShouldLog
+	databaseName     string
+	logArgs          bool
+	logArgsLenLimit  int
+	histogram        metric.Float64Histogram
+	traceProvider    trace.TracerProvider
+	traceLibraryName string
 }
 
 func NewDBTracer(
 	databaseName string,
 	opts ...Option,
 ) (Tracer, error) {
+	if databaseName == "" {
+		return nil, ErrDatabaseNameEmpty
+	}
+
 	optCtx := optionCtx{
 		name: "github.com/amirsalarsafaei/sqlc-pgx-monitoring",
 		shouldLog: func(_ error) bool {
@@ -69,12 +77,13 @@ func NewDBTracer(
 	}
 
 	return &dbTracer{
-		logger:       slog.Default(),
-		databaseName: databaseName,
-		tracer:       optCtx.traceProvider.Tracer(optCtx.name),
-		shouldLog:    optCtx.shouldLog,
-		logArgs:      optCtx.logArgs,
-		histogram:    histogram,
+		logger:           slog.Default(),
+		databaseName:     databaseName,
+		shouldLog:        optCtx.shouldLog,
+		logArgs:          optCtx.logArgs,
+		histogram:        histogram,
+		traceProvider:    optCtx.traceProvider,
+		traceLibraryName: optCtx.name,
 	}, nil
 }
 
@@ -125,6 +134,10 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	}
 
 	return logArgs
+}
+
+func (dt *dbTracer) getTracer() trace.Tracer {
+	return dt.traceProvider.Tracer(dt.traceLibraryName)
 }
 
 func extractConnectionID(conn *pgx.Conn) uint32 {

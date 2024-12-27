@@ -23,7 +23,7 @@ type tracePrepareData struct {
 
 func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn, data pgx.TracePrepareStartData) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.tracer.Start(ctx, "postgresql.prepare")
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.prepare")
 	span.SetAttributes(
 		attribute.String("db.name", dt.databaseName),
 		attribute.String("db.operation", "prepare"),
