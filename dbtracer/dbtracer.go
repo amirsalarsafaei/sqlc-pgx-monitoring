@@ -61,6 +61,7 @@ func NewDBTracer(
 			unit:        "s",
 			name:        "db_query_duration",
 		},
+		logger: slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(&optCtx)
@@ -77,7 +78,7 @@ func NewDBTracer(
 	}
 
 	return &dbTracer{
-		logger:           slog.Default(),
+		logger:           optCtx.logger,
 		databaseName:     databaseName,
 		shouldLog:        optCtx.shouldLog,
 		logArgs:          optCtx.logArgs,
