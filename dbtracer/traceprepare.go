@@ -21,7 +21,11 @@ type tracePrepareData struct {
 	statementName string // 16 bytes
 }
 
-func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn, data pgx.TracePrepareStartData) context.Context {
+func (dt *dbTracer) TracePrepareStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TracePrepareStartData,
+) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
 	ctx, span := dt.getTracer().Start(ctx, "postgresql.prepare")
 	span.SetAttributes(
@@ -41,7 +45,11 @@ func (dt *dbTracer) TracePrepareStart(ctx context.Context, _ *pgx.Conn, data pgx
 	})
 }
 
-func (dt *dbTracer) TracePrepareEnd(ctx context.Context, conn *pgx.Conn, data pgx.TracePrepareEndData) {
+func (dt *dbTracer) TracePrepareEnd(
+	ctx context.Context,
+	conn *pgx.Conn,
+	data pgx.TracePrepareEndData,
+) {
 	prepareData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
 	defer prepareData.span.End()
 
@@ -60,7 +68,7 @@ func (dt *dbTracer) TracePrepareEnd(ctx context.Context, conn *pgx.Conn, data pg
 		prepareData.span.RecordError(data.Err)
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"Prepare",
+				"prepare failed",
 				slog.String("statement_name", prepareData.statementName),
 				slog.String("sql", prepareData.sql),
 				slog.Duration("time", interval),
@@ -71,7 +79,7 @@ func (dt *dbTracer) TracePrepareEnd(ctx context.Context, conn *pgx.Conn, data pg
 	} else {
 		prepareData.span.SetStatus(codes.Ok, "")
 		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"Prepare",
+			"prepare",
 			slog.String("statement_name", prepareData.statementName),
 			slog.String("sql", prepareData.sql),
 			slog.Duration("time", interval),

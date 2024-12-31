@@ -1,9 +1,11 @@
 package dbtracer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math/rand"
 	"sync"
@@ -95,11 +97,12 @@ func (s *DBTracerSuite) SetupTest() {
 
 func (s *DBTracerSuite) TestNewDBTracer() {
 	tests := []struct {
-		name         string
-		databaseName string
-		opts         []Option
-		setupMocks   func(*mockmetric.MockMeterProvider, *mockmetric.MockMeter, *mockmetric.MockFloat64Histogram, *mocktracer.MockTracerProvider, *mocktracer.MockTracer)
-		wantErr      bool
+		name           string
+		databaseName   string
+		opts           []Option
+		setupMocks     func(*mockmetric.MockMeterProvider, *mockmetric.MockMeter, *mockmetric.MockFloat64Histogram, *mocktracer.MockTracerProvider, *mocktracer.MockTracer)
+		validateTracer func(*DBTracerSuite, Tracer)
+		wantErr        bool
 	}{
 		{
 			name:         "successful creation with default options",
@@ -116,6 +119,40 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 						metric.WithUnit("s"),
 					).
 					Return(h, nil)
+			},
+			wantErr: false,
+			validateTracer: func(s *DBTracerSuite, t Tracer) {
+				dbTracer, ok := t.(*dbTracer)
+				s.Require().True(ok)
+				s.Equal(
+					slog.Default(),
+					dbTracer.logger,
+					"Should use default logger when none specified",
+				)
+			},
+		},
+		{
+			name:         "successful creation with custom logger",
+			databaseName: "test_db",
+			opts: []Option{
+				WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+			},
+			setupMocks: func(mp *mockmetric.MockMeterProvider, m *mockmetric.MockMeter, h *mockmetric.MockFloat64Histogram, tp *mocktracer.MockTracerProvider, t *mocktracer.MockTracer) {
+				mp.EXPECT().
+					Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring").
+					Return(m)
+				m.EXPECT().
+					Float64Histogram(
+						"db_query_duration",
+						metric.WithDescription("The duration of database queries by sqlc function names"),
+						metric.WithUnit("s"),
+					).
+					Return(h, nil)
+			},
+			validateTracer: func(s *DBTracerSuite, t Tracer) {
+				dbTracer, ok := t.(*dbTracer)
+				s.Require().True(ok)
+				s.NotEqual(slog.Default(), dbTracer.logger, "Should use custom logger")
 			},
 			wantErr: false,
 		},
@@ -185,6 +222,9 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 			} else {
 				s.NoError(err)
 				s.NotNil(tracer)
+				if tt.validateTracer != nil {
+					tt.validateTracer(s, tracer)
+				}
 			}
 		})
 	}
@@ -708,6 +748,69 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 	}
 
 	s.NoError(errors.Join(errs...), "Expected no errors in concurrent execution")
+}
+
+func (s *DBTracerSuite) TestLoggerBehavior() {
+	var logBuffer bytes.Buffer
+	customLogger := slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithLogger(customLogger),
+		WithShouldLog(func(err error) bool { return true }),
+	)
+	s.Require().NoError(err)
+
+	// Setup for query execution
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.query").
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			attribute.String("db.name", s.defaultDBName),
+			attribute.String("db.query_name", "get_users"),
+			attribute.String("db.query_type", "one"),
+			attribute.String("db.operation", "query"),
+		).
+		Return()
+
+	ctx := tracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+		SQL:  s.defaultQuerySQL,
+		Args: []interface{}{1},
+	})
+
+	expectedErr := errors.New("test error code:9123")
+
+	s.span.EXPECT().
+		End().
+		Return()
+
+	s.span.EXPECT().
+		SetStatus(codes.Error, expectedErr.Error()).
+		Return()
+
+	s.span.EXPECT().
+		RecordError(expectedErr).
+		Return()
+
+	s.histogram.EXPECT().
+		Record(ctx, mock.AnythingOfType("float64"), mock.Anything).
+		Return()
+
+	tracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
+		CommandTag: pgconn.CommandTag{},
+		Err:        expectedErr,
+	})
+
+	logOutput := logBuffer.String()
+	s.Contains(logOutput, "test error code:9123")
+	s.Contains(logOutput, "get_users")
+	s.Contains(logOutput, "Query failed")
 }
 
 func (s *DBTracerSuite) TestTraceQueryEndOnError() {

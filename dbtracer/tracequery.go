@@ -22,7 +22,11 @@ type traceQueryData struct {
 	startTime time.Time  // 8 bytes
 }
 
-func (dt *dbTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+func (dt *dbTracer) TraceQueryStart(
+	ctx context.Context,
+	_ *pgx.Conn,
+	data pgx.TraceQueryStartData,
+) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
 	ctx, span := dt.getTracer().Start(ctx, "postgresql.query")
 	span.SetAttributes(
@@ -62,8 +66,9 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				fmt.Sprintf("Query: %s", queryData.queryName),
+				fmt.Sprintf("Query failed: %s", queryData.queryName),
 				slog.String("sql", queryData.sql),
+				slog.String("query_name", queryData.queryName),
 				slog.Any("args", dt.logQueryArgs(queryData.args)),
 				slog.String("query_type", queryData.queryType),
 				slog.Duration("time", interval),
@@ -76,6 +81,7 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		dt.logger.LogAttrs(ctx, slog.LevelInfo,
 			fmt.Sprintf("Query: %s", queryData.queryName),
 			slog.String("sql", queryData.sql),
+			slog.String("query_name", queryData.queryName),
 			slog.String("query_type", queryData.queryType),
 			slog.Any("args", dt.logQueryArgs(queryData.args)),
 			slog.Duration("time", interval),
