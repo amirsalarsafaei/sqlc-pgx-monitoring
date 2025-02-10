@@ -2,14 +2,12 @@ package dbtracer
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -20,10 +18,9 @@ type traceBatchData struct {
 }
 
 func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.batch")
+	ctx, span := dt.startSpan(ctx, "postgresql.batch")
 	span.SetAttributes(
-		attribute.String("db.name", dt.databaseName),
-		attribute.String("db.operation", "batch"),
+		PGXOperationTypeKey.String("batch"),
 	)
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
 		startTime: time.Now(),
@@ -33,12 +30,20 @@ func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.Trac
 
 func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchQueryData) {
 	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if queryData == nil {
+		return
+	}
 	queryName, queryType := queryNameFromSQL(data.SQL)
 	queryData.queryName = queryName
+
 	queryData.span.SetAttributes(
-		attribute.String("db.query_name", queryName),
-		attribute.String("db.query_type", queryType),
+		SQLCQueryNameKey.String(queryName),
+		SQLCQueryTypeKey.String(queryType),
 	)
+	queryData.span.SetName(queryName)
+	if dt.includeQueryText {
+		queryData.span.SetAttributes(semconv.DBQueryText(data.SQL))
+	}
 
 	if data.Err != nil {
 		queryData.span.SetStatus(codes.Error, data.Err.Error())
@@ -46,7 +51,7 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"Query",
+				queryName,
 				slog.String("sql", data.SQL),
 				slog.Any("args", dt.logQueryArgs(data.Args)),
 				slog.Uint64("pid", uint64(extractConnectionID(conn))),
@@ -56,7 +61,7 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
 		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"Query",
+			queryName,
 			slog.String("sql", data.SQL),
 			slog.Any("args", dt.logQueryArgs(data.Args)),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
@@ -67,23 +72,22 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 
 func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchEndData) {
 	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if queryData == nil {
+		return
+	}
 	defer queryData.span.End()
 
 	endTime := time.Now()
 	interval := endTime.Sub(queryData.startTime)
-	dt.histogram.Record(ctx, interval.Seconds(), metric.WithAttributes(
-		attribute.String("operation", "batch"),
-		attribute.String("query_name", queryData.queryName),
-		attribute.Bool("error", data.Err != nil),
-	))
+
+	dt.recordHistogramMetric(ctx, "batch", queryData.queryName, interval, data.Err)
 
 	if data.Err != nil {
-		queryData.span.SetStatus(codes.Error, data.Err.Error())
-		queryData.span.RecordError(data.Err)
+		dt.recordSpanError(queryData.span, data.Err)
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				fmt.Sprintf("Query: %s", queryData.queryName),
+				"batch queries",
 				slog.Duration("interval", interval),
 				slog.Uint64("pid", uint64(extractConnectionID(conn))),
 				slog.String("error", data.Err.Error()),
@@ -92,7 +96,7 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
 		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"Query",
+			"batch queries",
 			slog.Duration("interval", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
