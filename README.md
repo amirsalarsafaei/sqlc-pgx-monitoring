@@ -13,6 +13,8 @@
   - Prepared statements
   - Connection lifecycle
   - COPY FROM operations
+ 
+- **OpenTelemetry Semantic Convention**: Aligned with Otel's semantic convetions ([defined here](https://opentelemetry.io/docs/specs/semconv/database/)). 
 
 - **Modern Structured Logging**: Native support for Go's `slog` package, providing structured, leveled logging that's easy to parse and analyze.
 
@@ -27,7 +29,7 @@
 To get started with `sqlc-pgx-monitoring`, you can simply use `go get`:
 
 ```shell
-go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.3.1
+go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.4.0
 ```
 
 ## Usage
