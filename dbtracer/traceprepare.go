@@ -2,13 +2,13 @@ package dbtracer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -27,14 +27,18 @@ func (dt *dbTracer) TracePrepareStart(
 	data pgx.TracePrepareStartData,
 ) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.prepare")
+	ctx, span := dt.startSpan(ctx, fmt.Sprintf("prepare.%s", queryName))
 	span.SetAttributes(
-		attribute.String("db.name", dt.databaseName),
-		attribute.String("db.operation", "prepare"),
-		attribute.String("db.prepared_statement_name", data.Name),
-		attribute.String("db.query_name", queryName),
-		attribute.String("db.query_type", queryType),
+		PGXOperationTypeKey.String("prepare"),
+		PGXPrepareStmtNameKey.String(data.Name),
+		SQLCQueryNameKey.String(queryName),
+		SQLCQueryTypeKey.String(queryType),
 	)
+
+	if dt.includeQueryText {
+		span.SetAttributes(semconv.DBQueryText(data.SQL))
+	}
+
 	return context.WithValue(ctx, dbTracerPrepareCtxKey, &tracePrepareData{
 		startTime:     time.Now(),
 		statementName: data.Name,
@@ -55,17 +59,11 @@ func (dt *dbTracer) TracePrepareEnd(
 
 	endTime := time.Now()
 	interval := endTime.Sub(prepareData.startTime)
-	dt.histogram.Record(ctx, interval.Seconds(), metric.WithAttributes(
-		attribute.String("operation", "prepare"),
-		attribute.String("statement_name", prepareData.statementName),
-		attribute.String("query_name", prepareData.queryName),
-		attribute.String("query_type", prepareData.queryType),
-		attribute.Bool("error", data.Err != nil),
-	))
+	dt.recordHistogramMetric(ctx, "prepare", prepareData.queryName, interval, data.Err)
 
 	if data.Err != nil {
-		prepareData.span.SetStatus(codes.Error, data.Err.Error())
-		prepareData.span.RecordError(data.Err)
+		dt.recordSpanError(prepareData.span, data.Err)
+
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				"prepare failed",

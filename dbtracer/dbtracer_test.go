@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 
 	mockmetric "github.com/amirsalarsafaei/sqlc-pgx-monitoring/mocks/go.opentelemetry.io/otel/metric"
 	mocktracer "github.com/amirsalarsafaei/sqlc-pgx-monitoring/mocks/go.opentelemetry.io/otel/trace"
@@ -84,6 +84,13 @@ func (s *DBTracerSuite) SetupTest() {
 		Float64Histogram(mock.Anything, mock.Anything, mock.Anything).
 		Return(s.histogram, nil)
 
+	s.span.EXPECT().
+		SetAttributes(
+			semconv.DBSystemPostgreSQL,
+			semconv.DBNamespace(s.defaultDBName),
+		).
+		Return().Maybe()
+
 	var err error
 	s.dbTracer, err = NewDBTracer(
 		s.defaultDBName,
@@ -114,9 +121,9 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 					Return(m)
 				m.EXPECT().
 					Float64Histogram(
-						"db_query_duration",
-						metric.WithDescription("The duration of database queries by sqlc function names"),
-						metric.WithUnit("s"),
+						semconv.DBClientOperationDurationName,
+						metric.WithDescription(semconv.DBClientOperationDurationDescription),
+						metric.WithUnit(semconv.DBClientOperationDurationUnit),
 					).
 					Return(h, nil)
 			},
@@ -143,9 +150,9 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 					Return(m)
 				m.EXPECT().
 					Float64Histogram(
-						"db_query_duration",
-						metric.WithDescription("The duration of database queries by sqlc function names"),
-						metric.WithUnit("s"),
+						semconv.DBClientOperationDurationName,
+						metric.WithDescription(semconv.DBClientOperationDurationDescription),
+						metric.WithUnit(semconv.DBClientOperationDurationUnit),
 					).
 					Return(h, nil)
 			},
@@ -238,10 +245,9 @@ func (s *DBTracerSuite) TestTraceQueryStart() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return()
 
@@ -264,10 +270,9 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return()
 
@@ -286,10 +291,9 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
-			attribute.String("operation", "query"),
-			attribute.String("query_name", "get_users"),
-			attribute.String("query_type", "one"),
-			attribute.Bool("error", false),
+			PGXOperationTypeKey.String("query"),
+			PGXStatusKey.String("OK"),
+			SQLCQueryNameKey.String("get_users"),
 		)).
 		Return()
 
@@ -306,10 +310,9 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return()
 
@@ -348,8 +351,7 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "batch"),
+			PGXOperationTypeKey.String("batch"),
 		).
 		Return()
 
@@ -357,10 +359,12 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
 		).
 		Return()
+
+	s.span.EXPECT().SetName(mock.Anything).Return()
 
 	s.span.EXPECT().
 		SetStatus(codes.Ok, "").
@@ -398,16 +402,15 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "prepare.get_users").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "prepare"),
-			attribute.String("db.prepared_statement_name", stmtName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
+			PGXOperationTypeKey.String("prepare"),
+			PGXPrepareStmtNameKey.String(stmtName),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
 		).
 		Return()
 
@@ -441,14 +444,20 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 func (s *DBTracerSuite) TestTraceConnectSuccess() {
 	connConfig := &pgx.ConnConfig{}
 
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect").
+		Return(s.ctx, s.span)
+
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
 		ConnConfig: connConfig,
 	})
 
+	s.span.EXPECT().End().Return()
+
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
-			attribute.String("operation", "connect"),
-			attribute.Bool("error", false),
+			PGXOperationTypeKey.String("connect"),
+			PGXStatusKey.String("OK"),
+			SQLCQueryNameKey.String("connect"),
 		)).
 		Return()
 
@@ -464,13 +473,22 @@ func (s *DBTracerSuite) TestTraceConnectError() {
 	connConfig := &pgx.ConnConfig{}
 	expectedErr := errors.New("connection failed")
 
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect").
+		Return(s.ctx, s.span)
+
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
 		ConnConfig: connConfig,
 	})
+
+	s.span.EXPECT().End().Return()
+	s.span.EXPECT().RecordError(mock.Anything).Return()
+	s.span.EXPECT().SetStatus(mock.Anything, mock.Anything).Return()
+
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
-			attribute.String("operation", "connect"),
-			attribute.Bool("error", true),
+			PGXOperationTypeKey.String("connect"),
+			PGXStatusKey.String("UNKNOWN_ERROR"),
+			SQLCQueryNameKey.String("connect"),
 		)).
 		Return()
 
@@ -494,8 +512,7 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "copy"),
+			PGXOperationTypeKey.String("copy_from"),
 			attribute.String("db.table", "\"users\""),
 		).
 		Return()
@@ -515,9 +532,9 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), s.matchAttributes(
-			attribute.String("operation", "copy"),
-			attribute.String("table", "\"users\""),
-			attribute.Bool("error", false),
+			PGXOperationTypeKey.String("copy_from"),
+			PGXStatusKey.String("OK"),
+			SQLCQueryNameKey.String("copy_from"),
 		)).
 		Return()
 
@@ -538,8 +555,7 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "copy"),
+			PGXOperationTypeKey.String("copy_from"),
 			attribute.String("db.table", "\"users\""),
 		).
 		Return()
@@ -566,9 +582,9 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
-			attribute.String("operation", "copy"),
-			attribute.String("table", "\"users\""),
-			attribute.Bool("error", true),
+			PGXOperationTypeKey.String("copy_from"),
+			PGXStatusKey.String("UNKNOWN_ERROR"),
+			SQLCQueryNameKey.String("copy_from"),
 		)).
 		Return()
 
@@ -582,16 +598,15 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "prepare.get_users").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "prepare"),
-			attribute.String("db.prepared_statement_name", stmtName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
+			PGXOperationTypeKey.String("prepare"),
+			PGXPrepareStmtNameKey.String(stmtName),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
 		).
 		Return()
 
@@ -610,11 +625,9 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
-			attribute.String("operation", "prepare"),
-			attribute.String("statement_name", stmtName),
-			attribute.String("query_name", "get_users"),
-			attribute.String("query_type", "one"),
-			attribute.Bool("error", false),
+			PGXOperationTypeKey.String("prepare"),
+			PGXStatusKey.String("OK"),
+			SQLCQueryNameKey.String("get_users"),
 		)).
 		Return()
 
@@ -628,16 +641,15 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 	expectedErr := errors.New("prepare failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "prepare.get_users").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.operation", "prepare"),
-			attribute.String("db.prepared_statement_name", stmtName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
+			PGXOperationTypeKey.String("prepare"),
+			PGXPrepareStmtNameKey.String(stmtName),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
 		).
 		Return()
 
@@ -664,11 +676,9 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
-			attribute.String("operation", "prepare"),
-			attribute.String("statement_name", stmtName),
-			attribute.String("query_name", "get_users"),
-			attribute.String("query_type", "one"),
-			attribute.Bool("error", true),
+			PGXOperationTypeKey.String("prepare"),
+			PGXStatusKey.String("UNKNOWN_ERROR"),
+			SQLCQueryNameKey.String("get_users"),
 		)).
 		Return()
 
@@ -679,7 +689,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 
 func (s *DBTracerSuite) TestTraceConcurrent() {
 	numGoroutines := 10
-	var wg sync.WaitGroup
+	var wg, startWg sync.WaitGroup
 	results := make(chan error, numGoroutines)
 
 	trigger := make(chan int)
@@ -691,10 +701,9 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return().
 		Times(numGoroutines)
@@ -714,17 +723,18 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 		Return().
 		Times(numGoroutines)
 
+	wg.Add(numGoroutines)
+	startWg.Add(numGoroutines)
 	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
 		go func(id int, trigger <-chan int) {
 			defer wg.Done()
+			startWg.Done()
+			startWg.Wait()
 
 			ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
 				SQL:  s.defaultQuerySQL,
 				Args: []interface{}{id},
 			})
-
-			time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
 
 			s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
 				CommandTag: pgconn.CommandTag{},
@@ -735,8 +745,6 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 		}(i, trigger)
 	}
 
-	time.Sleep(500 * time.Millisecond)
-	close(trigger)
 	wg.Wait()
 	close(results)
 
@@ -772,10 +780,9 @@ func (s *DBTracerSuite) TestLoggerBehavior() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return()
 
@@ -820,10 +827,9 @@ func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 
 	s.span.EXPECT().
 		SetAttributes(
-			attribute.String("db.name", s.defaultDBName),
-			attribute.String("db.query_name", "get_users"),
-			attribute.String("db.query_type", "one"),
-			attribute.String("db.operation", "query"),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
 		).
 		Return()
 

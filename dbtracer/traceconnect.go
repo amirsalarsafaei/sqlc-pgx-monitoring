@@ -6,19 +6,22 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type traceConnectData struct {
+	span       trace.Span
 	startTime  time.Time
 	connConfig *pgx.ConnConfig
 }
 
 func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
+	ctx, span := dt.startSpan(ctx, "postgresql.connect")
+
 	return context.WithValue(ctx, dbTracerConnectCtxKey, &traceConnectData{
 		startTime:  time.Now(),
 		connConfig: data.ConnConfig,
+		span:       span,
 	})
 }
 
@@ -28,12 +31,13 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 	endTime := time.Now()
 	interval := endTime.Sub(connectData.startTime)
 
-	dt.histogram.Record(ctx, interval.Seconds(), metric.WithAttributes(
-		attribute.String("operation", "connect"),
-		attribute.Bool("error", data.Err != nil),
-	))
+	dt.recordHistogramMetric(ctx, "connect", "connect", interval, data.Err)
+
+	defer connectData.span.End()
 
 	if data.Err != nil {
+		dt.recordSpanError(connectData.span, data.Err)
+
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				"database connect",
@@ -41,11 +45,10 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 				slog.Uint64("port", uint64(connectData.connConfig.Port)),
 				slog.String("database", connectData.connConfig.Database),
 				slog.Duration("time", interval),
-				slog.String("error", data.Err.Error()),
+				slog.Any("error", data.Err),
 			)
 		}
 		return
-
 	}
 
 	dt.logger.LogAttrs(ctx, slog.LevelInfo,
@@ -55,14 +58,4 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 		slog.String("database", connectData.connConfig.Database),
 		slog.Duration("time", interval),
 	)
-
-	if data.Conn != nil {
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"database connect",
-			slog.String("host", connectData.connConfig.Host),
-			slog.Uint64("port", uint64(connectData.connConfig.Port)),
-			slog.String("database", connectData.connConfig.Database),
-			slog.Duration("time", interval),
-		)
-	}
 }

@@ -7,9 +7,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -28,13 +27,17 @@ func (dt *dbTracer) TraceQueryStart(
 	data pgx.TraceQueryStartData,
 ) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.query")
+	ctx, span := dt.startSpan(ctx, "postgresql.query")
 	span.SetAttributes(
-		attribute.String("db.name", dt.databaseName),
-		attribute.String("db.query_name", queryName),
-		attribute.String("db.query_type", queryType),
-		attribute.String("db.operation", "query"),
+		SQLCQueryNameKey.String(queryName),
+		SQLCQueryTypeKey.String(queryType),
+		PGXOperationTypeKey.String("query"),
 	)
+
+	if dt.includeQueryText {
+		span.SetAttributes(semconv.DBQueryText(data.SQL))
+	}
+
 	return context.WithValue(ctx, dbTracerQueryCtxKey, &traceQueryData{
 		startTime: time.Now(),
 		sql:       data.SQL,
@@ -50,19 +53,13 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 
 	endTime := time.Now()
 	interval := endTime.Sub(queryData.startTime)
-	histogramAttrs := []attribute.KeyValue{
-		attribute.String("operation", "query"),
-		attribute.String("query_name", queryData.queryName),
-		attribute.String("query_type", queryData.queryType),
-		attribute.Bool("error", data.Err != nil),
-	}
-	dt.histogram.Record(ctx, interval.Seconds(), metric.WithAttributes(histogramAttrs...))
+
+	dt.recordHistogramMetric(ctx, "query", queryData.queryName, interval, data.Err)
 
 	defer queryData.span.End()
 
 	if data.Err != nil {
-		queryData.span.SetStatus(codes.Error, data.Err.Error())
-		queryData.span.RecordError(data.Err)
+		dt.recordSpanError(queryData.span, data.Err)
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,

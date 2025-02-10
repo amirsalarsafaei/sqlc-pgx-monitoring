@@ -8,7 +8,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -20,10 +19,9 @@ type traceCopyFromData struct {
 }
 
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.copy_from")
+	ctx, span := dt.startSpan(ctx, "postgresql.copy_from")
 	span.SetAttributes(
-		attribute.String("db.name", dt.databaseName),
-		attribute.String("db.operation", "copy"),
+		PGXOperationTypeKey.String("copy_from"),
 		attribute.String("db.table", data.TableName.Sanitize()),
 	)
 	return context.WithValue(ctx, dbTracerCopyFromCtxKey, &traceCopyFromData{
@@ -40,15 +38,10 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 
 	endTime := time.Now()
 	interval := endTime.Sub(copyFromData.startTime)
-	dt.histogram.Record(ctx, interval.Seconds(), metric.WithAttributes(
-		attribute.String("operation", "copy"),
-		attribute.String("table", copyFromData.TableName.Sanitize()),
-		attribute.Bool("error", data.Err != nil),
-	))
+	dt.recordHistogramMetric(ctx, "copy_from", "copy_from", interval, data.Err)
 
 	if data.Err != nil {
-		copyFromData.span.SetStatus(codes.Error, data.Err.Error())
-		copyFromData.span.RecordError(data.Err)
+		dt.recordSpanError(copyFromData.span, data.Err)
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,

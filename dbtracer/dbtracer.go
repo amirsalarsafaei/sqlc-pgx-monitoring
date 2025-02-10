@@ -1,15 +1,20 @@
 package dbtracer
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 	"unicode/utf8"
 
+	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -33,6 +38,7 @@ type dbTracer struct {
 	histogram        metric.Float64Histogram
 	traceProvider    trace.TracerProvider
 	traceLibraryName string
+	includeQueryText bool
 }
 
 func NewDBTracer(
@@ -57,11 +63,12 @@ func NewDBTracer(
 			unit        string
 			description string
 		}{
-			description: "The duration of database queries by sqlc function names",
-			unit:        "s",
-			name:        "db_query_duration",
+			description: semconv.DBClientOperationDurationDescription,
+			unit:        semconv.DBClientOperationDurationUnit,
+			name:        semconv.DBClientOperationDurationName,
 		},
-		logger: slog.Default(),
+		logger:         slog.Default(),
+		includeSQLText: false,
 	}
 	for _, opt := range opts {
 		opt(&optCtx)
@@ -85,6 +92,7 @@ func NewDBTracer(
 		histogram:        histogram,
 		traceProvider:    optCtx.traceProvider,
 		traceLibraryName: optCtx.name,
+		includeQueryText: optCtx.includeSQLText,
 	}, nil
 }
 
@@ -98,6 +106,39 @@ const (
 	dbTracerConnectCtxKey
 	dbTracerPrepareCtxKey
 )
+
+func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			span.SetAttributes(DBStatusCodeKey.String(pgErr.Code))
+		}
+	}
+}
+
+func (dt *dbTracer) recordHistogramMetric(ctx context.Context, pgxOperation string, queryName string, duration time.Duration, err error) {
+	dt.histogram.Record(ctx, duration.Seconds(), metric.WithAttributes(
+		PGXStatusKey.String(pgxStatusFromErr(err)),
+		PGXOperationTypeKey.String(pgxOperation),
+		SQLCQueryNameKey.String(queryName),
+	))
+}
+
+func pgxStatusFromErr(err error) string {
+	if err == nil {
+		return "OK"
+	}
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Severity
+	}
+
+	return "UNKNOWN_ERROR"
+}
 
 func (dt *dbTracer) logQueryArgs(args []any) []any {
 	if !dt.logArgs {
@@ -135,6 +176,16 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	}
 
 	return logArgs
+}
+
+func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
+	ctx, span := dt.getTracer().Start(ctx, name)
+	span.SetAttributes(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(dt.databaseName),
+	)
+
+	return ctx, span
 }
 
 func (dt *dbTracer) getTracer() trace.Tracer {
