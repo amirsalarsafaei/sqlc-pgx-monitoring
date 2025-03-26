@@ -45,7 +45,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"CopyFrom",
+				"copyfrom failed",
 				slog.Any("tableName", copyFromData.TableName),
 				slog.Any("columnNames", copyFromData.ColumnNames),
 				slog.Duration("time", interval),
@@ -56,7 +56,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 	} else {
 		copyFromData.span.SetStatus(codes.Ok, "")
 		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"CopyFrom",
+			"copyfrom",
 			slog.Any("tableName", copyFromData.TableName),
 			slog.Any("columnNames", copyFromData.ColumnNames),
 			slog.Duration("time", interval),

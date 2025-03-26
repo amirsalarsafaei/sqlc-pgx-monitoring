@@ -40,7 +40,7 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 
 		if dt.shouldLog(data.Err) {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"database connect",
+				"database connect failed",
 				slog.String("host", connectData.connConfig.Host),
 				slog.Uint64("port", uint64(connectData.connConfig.Port)),
 				slog.String("database", connectData.connConfig.Database),
