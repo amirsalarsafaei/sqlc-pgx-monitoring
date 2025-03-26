@@ -402,7 +402,7 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "prepare.get_users").
+		Start(s.ctx, "postgresql.prepare").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -598,7 +598,7 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "prepare.get_users").
+		Start(s.ctx, "postgresql.prepare").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -641,7 +641,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 	expectedErr := errors.New("prepare failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "prepare.get_users").
+		Start(s.ctx, "postgresql.prepare").
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
