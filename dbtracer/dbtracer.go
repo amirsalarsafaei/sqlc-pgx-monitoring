@@ -36,8 +36,7 @@ type dbTracer struct {
 	logArgs          bool
 	logArgsLenLimit  int
 	histogram        metric.Float64Histogram
-	traceProvider    trace.TracerProvider
-	traceLibraryName string
+	tracer           trace.Tracer
 	includeQueryText bool
 }
 
@@ -90,8 +89,7 @@ func NewDBTracer(
 		shouldLog:        optCtx.shouldLog,
 		logArgs:          optCtx.logArgs,
 		histogram:        histogram,
-		traceProvider:    optCtx.traceProvider,
-		traceLibraryName: optCtx.name,
+		tracer:           optCtx.traceProvider.Tracer(optCtx.name),
 		includeQueryText: optCtx.includeSQLText,
 	}, nil
 }
@@ -179,17 +177,13 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 }
 
 func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	ctx, span := dt.getTracer().Start(ctx, name)
+	ctx, span := dt.tracer.Start(ctx, name)
 	span.SetAttributes(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(dt.databaseName),
 	)
 
 	return ctx, span
-}
-
-func (dt *dbTracer) getTracer() trace.Tracer {
-	return dt.traceProvider.Tracer(dt.traceLibraryName)
 }
 
 func extractConnectionID(conn *pgx.Conn) uint32 {
