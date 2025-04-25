@@ -49,7 +49,7 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		queryData.span.SetStatus(codes.Error, data.Err.Error())
 		queryData.span.RecordError(data.Err)
 
-		if dt.shouldLog(data.Err) {
+		if dt.shouldLog(data.Err) && dt.logEnabled {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				queryName,
 				slog.String("sql", data.SQL),
@@ -60,13 +60,15 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		}
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			queryName,
-			slog.String("sql", data.SQL),
-			slog.Any("args", dt.logQueryArgs(data.Args)),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.String("commandTag", data.CommandTag.String()),
-		)
+		if dt.logEnabled {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				queryName,
+				slog.String("sql", data.SQL),
+				slog.Any("args", dt.logQueryArgs(data.Args)),
+				slog.Uint64("pid", uint64(extractConnectionID(conn))),
+				slog.String("commandTag", data.CommandTag.String()),
+			)
+		}
 	}
 }
 
@@ -85,7 +87,7 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	if data.Err != nil {
 		dt.recordSpanError(queryData.span, data.Err)
 
-		if dt.shouldLog(data.Err) {
+		if dt.shouldLog(data.Err) && dt.logEnabled {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				"batch queries",
 				slog.Duration("interval", interval),
@@ -95,10 +97,12 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		}
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"batch queries",
-			slog.Duration("interval", interval),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-		)
+		if dt.logEnabled {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"batch queries",
+				slog.Duration("interval", interval),
+				slog.Uint64("pid", uint64(extractConnectionID(conn))),
+			)
+		}
 	}
 }

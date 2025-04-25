@@ -23,6 +23,7 @@ type optionCtx struct {
 	logArgs         bool
 	logArgsLenLimit int
 	includeSQLText  bool
+	logEnabled      bool
 }
 
 type Option func(*optionCtx)
@@ -74,5 +75,11 @@ func WithLogArgsLenLimit(limit int) Option {
 func WithIncludeSQLText(includeSQLText bool) Option {
 	return func(oc *optionCtx) {
 		oc.includeSQLText = includeSQLText
+	}
+}
+
+func WithLogEnabled(enabled bool) Option {
+	return func(oc *optionCtx) {
+		oc.logEnabled = enabled
 	}
 }

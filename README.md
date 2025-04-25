@@ -62,6 +62,7 @@ The `NewDBTracer` function accepts various options to customize its behavior:
 
 #### Logging Options
 - `WithLogger(logger *slog.Logger)`: Sets a custom structured logger for query logging
+- `WithLogEnabled(enabled bool)`: Enables/disables logging
 - `WithShouldLog(shouldLog ShouldLog)`: Configures when to log based on error conditions
 - `WithLogArgs(enabled bool)`: Enables/disables logging of query arguments
 - `WithLogArgsLenLimit(limit int)`: Sets maximum length for logged arguments

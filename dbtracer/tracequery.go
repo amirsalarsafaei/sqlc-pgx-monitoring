@@ -61,7 +61,7 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	if data.Err != nil {
 		dt.recordSpanError(queryData.span, data.Err)
 
-		if dt.shouldLog(data.Err) {
+		if dt.shouldLog(data.Err) && dt.logEnabled {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				fmt.Sprintf("Query failed: %s", queryData.queryName),
 				slog.String("sql", queryData.sql),
@@ -75,15 +75,17 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		}
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			fmt.Sprintf("Query: %s", queryData.queryName),
-			slog.String("sql", queryData.sql),
-			slog.String("query_name", queryData.queryName),
-			slog.String("query_type", queryData.queryType),
-			slog.Any("args", dt.logQueryArgs(queryData.args)),
-			slog.Duration("time", interval),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.String("commandTag", data.CommandTag.String()),
-		)
+		if dt.logEnabled {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				fmt.Sprintf("Query: %s", queryData.queryName),
+				slog.String("sql", queryData.sql),
+				slog.String("query_name", queryData.queryName),
+				slog.String("query_type", queryData.queryType),
+				slog.Any("args", dt.logQueryArgs(queryData.args)),
+				slog.Duration("time", interval),
+				slog.Uint64("pid", uint64(extractConnectionID(conn))),
+				slog.String("commandTag", data.CommandTag.String()),
+			)
+		}
 	}
 }

@@ -63,7 +63,7 @@ func (dt *dbTracer) TracePrepareEnd(
 	if data.Err != nil {
 		dt.recordSpanError(prepareData.span, data.Err)
 
-		if dt.shouldLog(data.Err) {
+		if dt.shouldLog(data.Err) && dt.logEnabled {
 			dt.logger.LogAttrs(ctx, slog.LevelError,
 				"prepare failed",
 				slog.String("statement_name", prepareData.statementName),
@@ -75,13 +75,15 @@ func (dt *dbTracer) TracePrepareEnd(
 		}
 	} else {
 		prepareData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"prepare",
-			slog.String("statement_name", prepareData.statementName),
-			slog.String("sql", prepareData.sql),
-			slog.Duration("time", interval),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.Bool("alreadyPrepared", data.AlreadyPrepared),
-		)
+		if dt.logEnabled {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"prepare",
+				slog.String("statement_name", prepareData.statementName),
+				slog.String("sql", prepareData.sql),
+				slog.Duration("time", interval),
+				slog.Uint64("pid", uint64(extractConnectionID(conn))),
+				slog.Bool("alreadyPrepared", data.AlreadyPrepared),
+			)
+		}
 	}
 }

@@ -39,6 +39,7 @@ type dbTracer struct {
 	traceProvider    trace.TracerProvider
 	traceLibraryName string
 	includeQueryText bool
+	logEnabled       bool
 }
 
 func NewDBTracer(
@@ -69,6 +70,7 @@ func NewDBTracer(
 		},
 		logger:         slog.Default(),
 		includeSQLText: false,
+		logEnabled:     true,
 	}
 	for _, opt := range opts {
 		opt(&optCtx)
@@ -93,6 +95,7 @@ func NewDBTracer(
 		traceProvider:    optCtx.traceProvider,
 		traceLibraryName: optCtx.name,
 		includeQueryText: optCtx.includeSQLText,
+		logEnabled:       optCtx.logEnabled,
 	}, nil
 }
 
