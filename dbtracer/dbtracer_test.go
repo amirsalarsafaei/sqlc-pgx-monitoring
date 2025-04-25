@@ -84,6 +84,10 @@ func (s *DBTracerSuite) SetupTest() {
 		Float64Histogram(mock.Anything, mock.Anything, mock.Anything).
 		Return(s.histogram, nil)
 
+	s.shouldLog.EXPECT().
+		Execute(mock.Anything).Maybe().
+		Return(true)
+
 	s.span.EXPECT().
 		SetAttributes(
 			semconv.DBSystemPostgreSQL,
