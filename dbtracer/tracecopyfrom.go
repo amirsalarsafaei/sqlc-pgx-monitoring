@@ -40,28 +40,25 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 	interval := endTime.Sub(copyFromData.startTime)
 	dt.recordHistogramMetric(ctx, "copy_from", "copy_from", interval, data.Err)
 
+	var logAttrs []slog.Attr
+
 	if data.Err != nil {
 		dt.recordSpanError(copyFromData.span, data.Err)
-
-		if dt.shouldLog(data.Err) {
-			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"copyfrom failed",
-				slog.Any("tableName", copyFromData.TableName),
-				slog.Any("columnNames", copyFromData.ColumnNames),
-				slog.Duration("time", interval),
-				slog.Uint64("pid", uint64(extractConnectionID(conn))),
-				slog.String("error", data.Err.Error()),
-			)
-		}
+		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 	} else {
 		copyFromData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"copyfrom",
-			slog.Any("tableName", copyFromData.TableName),
+		logAttrs = append(logAttrs, slog.Int64("rowCount", data.CommandTag.RowsAffected()))
+	}
+
+	if dt.shouldLog(data.Err) {
+		logAttrs = append(logAttrs, slog.Any("tableName", copyFromData.TableName),
 			slog.Any("columnNames", copyFromData.ColumnNames),
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.Int64("rowCount", data.CommandTag.RowsAffected()),
+		)
+		dt.logger.LogAttrs(ctx, slog.LevelError,
+			"copyfrom failed",
+			logAttrs...,
 		)
 	}
 }

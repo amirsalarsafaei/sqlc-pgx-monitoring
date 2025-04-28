@@ -60,28 +60,26 @@ func (dt *dbTracer) TracePrepareEnd(
 	interval := endTime.Sub(prepareData.startTime)
 	dt.recordHistogramMetric(ctx, "prepare", prepareData.queryName, interval, data.Err)
 
+	var logAttrs []slog.Attr
+
 	if data.Err != nil {
 		dt.recordSpanError(prepareData.span, data.Err)
-
-		if dt.shouldLog(data.Err) {
-			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"prepare failed",
-				slog.String("statement_name", prepareData.statementName),
-				slog.String("sql", prepareData.sql),
-				slog.Duration("time", interval),
-				slog.Uint64("pid", uint64(extractConnectionID(conn))),
-				slog.String("error", data.Err.Error()),
-			)
-		}
+		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 	} else {
 		prepareData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"prepare",
-			slog.String("statement_name", prepareData.statementName),
+		logAttrs = append(logAttrs, slog.Bool("alreadyPrepared", data.AlreadyPrepared))
+
+	}
+
+	if dt.shouldLog(data.Err) {
+		logAttrs = append(logAttrs, slog.String("statement_name", prepareData.statementName),
 			slog.String("sql", prepareData.sql),
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.Bool("alreadyPrepared", data.AlreadyPrepared),
+		)
+		dt.logger.LogAttrs(ctx, slog.LevelError,
+			"prepare failed",
+			logAttrs...,
 		)
 	}
 }

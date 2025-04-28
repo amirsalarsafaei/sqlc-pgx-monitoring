@@ -45,27 +45,25 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		queryData.span.SetAttributes(semconv.DBQueryText(data.SQL))
 	}
 
+	var logAttrs []slog.Attr
+
 	if data.Err != nil {
 		queryData.span.SetStatus(codes.Error, data.Err.Error())
 		queryData.span.RecordError(data.Err)
-
-		if dt.shouldLog(data.Err) {
-			dt.logger.LogAttrs(ctx, slog.LevelError,
-				queryName,
-				slog.String("sql", data.SQL),
-				slog.Any("args", dt.logQueryArgs(data.Args)),
-				slog.Uint64("pid", uint64(extractConnectionID(conn))),
-				slog.String("error", data.Err.Error()),
-			)
-		}
+		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			queryName,
-			slog.String("sql", data.SQL),
+		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
+	}
+
+	if dt.shouldLog(data.Err) {
+		logAttrs = append(logAttrs, slog.String("sql", data.SQL),
 			slog.Any("args", dt.logQueryArgs(data.Args)),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-			slog.String("commandTag", data.CommandTag.String()),
+		)
+		dt.logger.LogAttrs(ctx, slog.LevelError,
+			queryName,
+			logAttrs...,
 		)
 	}
 }
@@ -82,23 +80,23 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 
 	dt.recordHistogramMetric(ctx, "batch", queryData.queryName, interval, data.Err)
 
+	var logAttrs []slog.Attr
+
 	if data.Err != nil {
 		dt.recordSpanError(queryData.span, data.Err)
-
-		if dt.shouldLog(data.Err) {
-			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"batch queries",
-				slog.Duration("interval", interval),
-				slog.Uint64("pid", uint64(extractConnectionID(conn))),
-				slog.String("error", data.Err.Error()),
-			)
-		}
+		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 	} else {
+
 		queryData.span.SetStatus(codes.Ok, "")
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"batch queries",
-			slog.Duration("interval", interval),
+	}
+
+	if dt.shouldLog(data.Err) {
+		logAttrs = append(logAttrs, slog.Duration("interval", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
+		)
+		dt.logger.LogAttrs(ctx, slog.LevelError,
+			"batch queries",
+			logAttrs...,
 		)
 	}
 }

@@ -35,27 +35,24 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 
 	defer connectData.span.End()
 
+	var logAttrs []slog.Attr
+
 	if data.Err != nil {
 		dt.recordSpanError(connectData.span, data.Err)
-
-		if dt.shouldLog(data.Err) {
-			dt.logger.LogAttrs(ctx, slog.LevelError,
-				"database connect failed",
-				slog.String("host", connectData.connConfig.Host),
-				slog.Uint64("port", uint64(connectData.connConfig.Port)),
-				slog.String("database", connectData.connConfig.Database),
-				slog.Duration("time", interval),
-				slog.Any("error", data.Err),
-			)
-		}
-		return
+		logAttrs = append(logAttrs, slog.Any("error", data.Err))
 	}
 
-	dt.logger.LogAttrs(ctx, slog.LevelInfo,
-		"database connect",
-		slog.String("host", connectData.connConfig.Host),
-		slog.Uint64("port", uint64(connectData.connConfig.Port)),
-		slog.String("database", connectData.connConfig.Database),
-		slog.Duration("time", interval),
-	)
+	if dt.shouldLog(data.Err) {
+		logAttrs = append(logAttrs,
+			slog.String("host", connectData.connConfig.Host),
+			slog.Uint64("port", uint64(connectData.connConfig.Port)),
+			slog.String("database", connectData.connConfig.Database),
+			slog.Duration("time", interval),
+		)
+
+		dt.logger.LogAttrs(ctx, slog.LevelInfo,
+			"database connect",
+			logAttrs...,
+		)
+	}
 }
