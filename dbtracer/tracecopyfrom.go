@@ -40,7 +40,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 	interval := endTime.Sub(copyFromData.startTime)
 	dt.recordHistogramMetric(ctx, "copy_from", "copy_from", interval, data.Err)
 
-	logAttrs := []slog.Attr{}
+	var logAttrs []slog.Attr
 
 	if data.Err != nil {
 		dt.recordSpanError(copyFromData.span, data.Err)

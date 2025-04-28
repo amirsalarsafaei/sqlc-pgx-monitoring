@@ -60,7 +60,7 @@ func (dt *dbTracer) TracePrepareEnd(
 	interval := endTime.Sub(prepareData.startTime)
 	dt.recordHistogramMetric(ctx, "prepare", prepareData.queryName, interval, data.Err)
 
-	logAttrs := []slog.Attr{}
+	var logAttrs []slog.Attr
 
 	if data.Err != nil {
 		dt.recordSpanError(prepareData.span, data.Err)

@@ -45,7 +45,7 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		queryData.span.SetAttributes(semconv.DBQueryText(data.SQL))
 	}
 
-	logAttrs := []slog.Attr{}
+	var logAttrs []slog.Attr
 
 	if data.Err != nil {
 		queryData.span.SetStatus(codes.Error, data.Err.Error())
@@ -80,7 +80,7 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 
 	dt.recordHistogramMetric(ctx, "batch", queryData.queryName, interval, data.Err)
 
-	logAttrs := []slog.Attr{}
+	var logAttrs []slog.Attr
 
 	if data.Err != nil {
 		dt.recordSpanError(queryData.span, data.Err)

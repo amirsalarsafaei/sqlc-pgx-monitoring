@@ -35,7 +35,7 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 
 	defer connectData.span.End()
 
-	logAttrs := []slog.Attr{}
+	var logAttrs []slog.Attr
 
 	if data.Err != nil {
 		dt.recordSpanError(connectData.span, data.Err)
