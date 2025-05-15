@@ -51,8 +51,8 @@ func NewDBTracer(
 
 	optCtx := optionCtx{
 		name: "github.com/amirsalarsafaei/sqlc-pgx-monitoring",
-		shouldLog: func(_ error) bool {
-			return true
+		shouldLog: func(err error) bool {
+			return err != nil
 		},
 		meterProvider:   otel.GetMeterProvider(),
 		traceProvider:   otel.GetTracerProvider(),
