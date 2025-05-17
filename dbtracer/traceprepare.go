@@ -68,7 +68,6 @@ func (dt *dbTracer) TracePrepareEnd(
 	} else {
 		prepareData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.Bool("alreadyPrepared", data.AlreadyPrepared))
-
 	}
 
 	if dt.shouldLog(data.Err) {
@@ -77,9 +76,17 @@ func (dt *dbTracer) TracePrepareEnd(
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"prepare failed",
-			logAttrs...,
-		)
+
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"prepare failed",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"prepare",
+				logAttrs...,
+			)
+		}
 	}
 }

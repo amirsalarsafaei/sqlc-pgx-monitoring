@@ -61,10 +61,18 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 			slog.Any("args", dt.logQueryArgs(data.Args)),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			queryName,
-			logAttrs...,
-		)
+
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"Batch failed",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"Batch",
+				logAttrs...,
+			)
+		}
 	}
 }
 
@@ -86,7 +94,6 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		dt.recordSpanError(queryData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 	} else {
-
 		queryData.span.SetStatus(codes.Ok, "")
 	}
 
@@ -94,9 +101,17 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 		logAttrs = append(logAttrs, slog.Duration("interval", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"batch queries",
-			logAttrs...,
-		)
+
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"batch end failed",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"batch end",
+				logAttrs...,
+			)
+		}
 	}
 }

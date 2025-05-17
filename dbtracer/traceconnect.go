@@ -50,9 +50,17 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 			slog.Duration("time", interval),
 		)
 
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
-			"database connect",
-			logAttrs...,
-		)
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"database connect",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"database connect",
+				logAttrs...,
+			)
+		}
+
 	}
 }

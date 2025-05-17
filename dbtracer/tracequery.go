@@ -2,7 +2,6 @@ package dbtracer
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -77,9 +76,17 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			fmt.Sprintf("Query failed: %s", queryData.queryName),
-			logAttrs...,
-		)
+
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"Query failed",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"Query",
+				logAttrs...,
+			)
+		}
 	}
 }

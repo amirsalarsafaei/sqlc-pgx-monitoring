@@ -56,9 +56,16 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"copyfrom failed",
-			logAttrs...,
-		)
+		if data.Err != nil {
+			dt.logger.LogAttrs(ctx, slog.LevelError,
+				"copyfrom failed",
+				logAttrs...,
+			)
+		} else {
+			dt.logger.LogAttrs(ctx, slog.LevelInfo,
+				"copyfrom",
+				logAttrs...,
+			)
+		}
 	}
 }
