@@ -36,10 +36,14 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 	defer connectData.span.End()
 
 	var logAttrs []slog.Attr
+	var level slog.Level
 
 	if data.Err != nil {
 		dt.recordSpanError(connectData.span, data.Err)
 		logAttrs = append(logAttrs, slog.Any("error", data.Err))
+		level = slog.LevelError
+	} else {
+		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
@@ -50,7 +54,7 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 			slog.Duration("time", interval),
 		)
 
-		dt.logger.LogAttrs(ctx, slog.LevelInfo,
+		dt.logger.LogAttrs(ctx, level,
 			"database connect",
 			logAttrs...,
 		)
