@@ -46,14 +46,17 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 	}
 
 	var logAttrs []slog.Attr
+	var level slog.Level
 
 	if data.Err != nil {
 		queryData.span.SetStatus(codes.Error, data.Err.Error())
 		queryData.span.RecordError(data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
+		level = slog.LevelError
 	} else {
 		queryData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
+		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
@@ -61,8 +64,9 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 			slog.Any("args", dt.logQueryArgs(data.Args)),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			queryName,
+
+		dt.logger.LogAttrs(ctx, level,
+			"batch",
 			logAttrs...,
 		)
 	}
@@ -81,21 +85,24 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	dt.recordHistogramMetric(ctx, "batch", queryData.queryName, interval, data.Err)
 
 	var logAttrs []slog.Attr
+	var level slog.Level
 
 	if data.Err != nil {
 		dt.recordSpanError(queryData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
+		level = slog.LevelError
 	} else {
-
 		queryData.span.SetStatus(codes.Ok, "")
+		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
 		logAttrs = append(logAttrs, slog.Duration("interval", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"batch queries",
+
+		dt.logger.LogAttrs(ctx, level,
+			"batch end",
 			logAttrs...,
 		)
 	}

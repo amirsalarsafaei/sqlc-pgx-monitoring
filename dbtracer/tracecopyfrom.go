@@ -41,13 +41,16 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 	dt.recordHistogramMetric(ctx, "copy_from", "copy_from", interval, data.Err)
 
 	var logAttrs []slog.Attr
+	var level slog.Level
 
 	if data.Err != nil {
 		dt.recordSpanError(copyFromData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
+		level = slog.LevelError
 	} else {
 		copyFromData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.Int64("rowCount", data.CommandTag.RowsAffected()))
+		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
@@ -56,8 +59,9 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"copyfrom failed",
+
+		dt.logger.LogAttrs(ctx, level,
+			"copyfrom",
 			logAttrs...,
 		)
 	}

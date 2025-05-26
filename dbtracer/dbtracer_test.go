@@ -821,7 +821,7 @@ func (s *DBTracerSuite) TestLoggerBehavior() {
 	logOutput := logBuffer.String()
 	s.Contains(logOutput, "test error code:9123")
 	s.Contains(logOutput, "get_users")
-	s.Contains(logOutput, "Query failed")
+	s.Contains(logOutput, "query")
 }
 
 func (s *DBTracerSuite) TestTraceQueryEndOnError() {

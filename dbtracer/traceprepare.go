@@ -61,14 +61,16 @@ func (dt *dbTracer) TracePrepareEnd(
 	dt.recordHistogramMetric(ctx, "prepare", prepareData.queryName, interval, data.Err)
 
 	var logAttrs []slog.Attr
+	var level slog.Level
 
 	if data.Err != nil {
 		dt.recordSpanError(prepareData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
+		level = slog.LevelError
 	} else {
 		prepareData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.Bool("alreadyPrepared", data.AlreadyPrepared))
-
+		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
@@ -77,8 +79,9 @@ func (dt *dbTracer) TracePrepareEnd(
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)
-		dt.logger.LogAttrs(ctx, slog.LevelError,
-			"prepare failed",
+
+		dt.logger.LogAttrs(ctx, level,
+			"prepare",
 			logAttrs...,
 		)
 	}
