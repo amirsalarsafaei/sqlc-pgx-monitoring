@@ -29,7 +29,7 @@
 To get started with `sqlc-pgx-monitoring`, you can simply use `go get`:
 
 ```shell
-go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.5.0
+go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.5.1
 ```
 
 ## Usage
