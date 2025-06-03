@@ -1,5 +1,13 @@
 SQLC_VERSION := v1.20.0
 
+.PHONY: clean generate gen-mocks gen-sqlc check-sqlc
+
+generate: clean gen-sqlc gen-mocks
+	@go generate ./...
+
+gen-mocks: 
+	mockery
+	
 gen-sqlc: check-sqlc
 	sqlc generate -f ./internal/example/db/sqlc.yaml
 
@@ -15,3 +23,7 @@ check-sqlc:
 	else \
 		echo "Required sqlc version $(SQLC_VERSION) is already installed"; \
 	fi
+
+clean:
+	find . -type f -name "*.go"  -exec grep -qE "// Code generated .* DO NOT EDIT\." {} \; -delete
+

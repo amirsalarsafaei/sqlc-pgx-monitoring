@@ -89,6 +89,7 @@ func NewDBTracer(
 		databaseName:     databaseName,
 		shouldLog:        optCtx.shouldLog,
 		logArgs:          optCtx.logArgs,
+		logArgsLenLimit:  optCtx.logArgsLenLimit,
 		histogram:        histogram,
 		traceProvider:    optCtx.traceProvider,
 		traceLibraryName: optCtx.name,
@@ -154,7 +155,7 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	for _, a := range args {
 		switch v := a.(type) {
 		case []byte:
-			if len(v) < limit {
+			if len(v) <= limit {
 				a = hex.EncodeToString(v)
 			} else {
 				a = fmt.Sprintf("%x (truncated %d bytes)", v[:limit], len(v)-limit)
@@ -179,7 +180,7 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 }
 
 func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	ctx, span := dt.getTracer().Start(ctx, name)
+	ctx, span := dt.getTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))
 	span.SetAttributes(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(dt.databaseName),

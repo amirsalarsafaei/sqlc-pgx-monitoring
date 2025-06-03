@@ -1,0 +1,29 @@
+dir: mocks/{{.SrcPackageName}}
+structname: Mock{{.InterfaceName}}
+template: file://mock_otel.tmpl
+template-data:
+  unroll-variadic: true
+packages:
+  github.com/amirsalarsafaei/sqlc-pgx-monitoring:
+    config:
+      all: true
+      dir: "{{.InterfaceDir}}"
+      structname: "{{.Mock}}{{.InterfaceName}}"
+      filename: "mock_{{.InterfaceName}}.go"
+      recursive: true
+  go.opentelemetry.io/otel/metric:
+    config:
+      all: true
+      dir: mocks/{{.SrcPackagePath}}
+      filename: "mock_{{.InterfaceName}}.go"
+  go.opentelemetry.io/otel/trace:
+    config:
+      dir: mocks/{{.SrcPackagePath}}
+      filename: "mock_{{.InterfaceName}}.go"
+    interfaces:
+      Span:
+        config: {}
+      Tracer:
+        config: {}
+      TracerProvider:
+        config: {}
