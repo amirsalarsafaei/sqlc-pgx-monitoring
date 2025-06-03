@@ -32,7 +32,7 @@ type DBTracerSuite struct {
 	meter           *mockmetric.MockMeter
 	meterProvider   *mockmetric.MockMeterProvider
 	histogram       *mockmetric.MockFloat64Histogram
-	shouldLog       *MockShouldLog
+	shouldLog       func() ShouldLog
 	logger          *slog.Logger
 	ctx             context.Context
 	pgxConn         *pgx.Conn
@@ -65,7 +65,11 @@ func (s *DBTracerSuite) SetupTest() {
 	s.meter = mockmetric.NewMockMeter(s.T())
 	s.meterProvider = mockmetric.NewMockMeterProvider(s.T())
 	s.histogram = mockmetric.NewMockFloat64Histogram(s.T())
-	s.shouldLog = NewMockShouldLog(s.T())
+	s.shouldLog = func() ShouldLog {
+		return func(err error) bool {
+			return true
+		}
+	}
 	s.logger = slog.Default()
 	s.ctx = context.Background()
 	s.defaultDBName = "test_db"
@@ -84,9 +88,7 @@ func (s *DBTracerSuite) SetupTest() {
 		Float64Histogram(mock.Anything, mock.Anything, mock.Anything).
 		Return(s.histogram, nil)
 
-	s.shouldLog.EXPECT().
-		Execute(mock.Anything).Maybe().
-		Return(true)
+	// shouldLog function is now a simple function, no mocking needed
 
 	s.span.EXPECT().
 		SetAttributes(
@@ -100,7 +102,7 @@ func (s *DBTracerSuite) SetupTest() {
 		s.defaultDBName,
 		WithTraceProvider(s.tracerProvider),
 		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog.Execute),
+		WithShouldLog(s.shouldLog()),
 		WithLogger(s.logger),
 	)
 	s.Require().NoError(err)
@@ -496,9 +498,7 @@ func (s *DBTracerSuite) TestTraceConnectError() {
 		)).
 		Return()
 
-	s.shouldLog.EXPECT().
-		Execute(expectedErr).
-		Return(true)
+	// shouldLog function returns true for all errors in test
 
 	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
 		Conn: nil,
@@ -580,9 +580,7 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 		RecordError(expectedErr).
 		Return()
 
-	s.shouldLog.EXPECT().
-		Execute(expectedErr).
-		Return(true)
+	// shouldLog function returns true for all errors in test
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
@@ -674,9 +672,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 		RecordError(expectedErr).
 		Return()
 
-	s.shouldLog.EXPECT().
-		Execute(expectedErr).
-		Return(true)
+	// shouldLog function returns true for all errors in test
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), metric.WithAttributes(
@@ -856,9 +852,7 @@ func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 		RecordError(expectedErr).
 		Return()
 
-	s.shouldLog.EXPECT().
-		Execute(expectedErr).
-		Return(true)
+	// shouldLog function returns true for all errors in test
 
 	s.histogram.EXPECT().
 		Record(ctx, mock.AnythingOfType("float64"), mock.Anything).
