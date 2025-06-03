@@ -180,7 +180,7 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 }
 
 func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	ctx, span := dt.getTracer().Start(ctx, name)
+	ctx, span := dt.getTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))
 	span.SetAttributes(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(dt.databaseName),
