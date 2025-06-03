@@ -245,7 +245,7 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 func (s *DBTracerSuite) TestTraceQueryStart() {
 	// Setup expectations
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query").
+		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -270,7 +270,7 @@ func (s *DBTracerSuite) TestTraceQueryStart() {
 
 func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query").
+		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -310,7 +310,7 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 
 func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query").
+		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -356,7 +356,7 @@ func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 
 func (s *DBTracerSuite) TestTraceQueryDuration() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query").
+		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -397,7 +397,7 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 
 func (s *DBTracerSuite) TestTraceBatchDuration() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.batch").
+		Start(s.ctx, "postgresql.batch",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -453,7 +453,7 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -497,7 +497,7 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -541,7 +541,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 	expectedErr := errors.New("prepare failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare").
+		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -586,7 +586,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 func (s *DBTracerSuite) TestTraceConnectSuccess() {
 	connConfig := &pgx.ConnConfig{}
 
-	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect").
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
@@ -615,7 +615,7 @@ func (s *DBTracerSuite) TestTraceConnectError() {
 	connConfig := &pgx.ConnConfig{}
 	expectedErr := errors.New("connection failed")
 
-	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect").
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
@@ -647,7 +647,7 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 	columnNames := []string{"id", "name"}
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.copy_from").
+		Start(s.ctx, "postgresql.copy_from",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -690,7 +690,7 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 	expectedErr := errors.New("copy failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.copy_from").
+		Start(s.ctx, "postgresql.copy_from",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -738,7 +738,7 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 
 	// Set up expectations for multiple queries
 	s.tracer.EXPECT().
-		Start(mock.Anything, "postgresql.query").
+		Start(mock.Anything, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span).
 		Times(numQueries)
 
@@ -916,7 +916,7 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 }
 
 func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
-	s.tracer.EXPECT().Start(s.ctx, "postgresql.batch").Return(s.ctx, s.span)
+	s.tracer.EXPECT().Start(s.ctx, "postgresql.batch",mock.AnythingOfType("trace.spanOptionFunc")).Return(s.ctx, s.span)
 	s.span.EXPECT().SetAttributes(PGXOperationTypeKey.String("batch")).Return()
 
 	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
