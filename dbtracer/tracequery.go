@@ -2,6 +2,7 @@ package dbtracer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -26,7 +27,12 @@ func (dt *dbTracer) TraceQueryStart(
 	data pgx.TraceQueryStartData,
 ) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.startSpan(ctx, "postgresql.query")
+	suffix := ""
+	if dt.appendQueryNameToSpan && queryName != "unknown" {
+		suffix = fmt.Sprintf("/%s", queryName)
+	}
+	name := fmt.Sprintf("postgresql.query%s", suffix)
+	ctx, span := dt.startSpan(ctx, name)
 	span.SetAttributes(
 		SQLCQueryNameKey.String(queryName),
 		SQLCQueryTypeKey.String(queryType),

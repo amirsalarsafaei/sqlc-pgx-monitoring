@@ -19,10 +19,11 @@ type optionCtx struct {
 		unit        string
 		description string
 	}
-	logger          *slog.Logger
-	logArgs         bool
-	logArgsLenLimit int
-	includeSQLText  bool
+	logger                *slog.Logger
+	logArgs               bool
+	logArgsLenLimit       int
+	includeSQLText        bool
+	appendQueryNameToSpan bool
 }
 
 type Option func(*optionCtx)
@@ -74,5 +75,11 @@ func WithLogArgsLenLimit(limit int) Option {
 func WithIncludeSQLText(includeSQLText bool) Option {
 	return func(oc *optionCtx) {
 		oc.includeSQLText = includeSQLText
+	}
+}
+
+func WithAppendQueryNameToSpan(enabled bool) Option {
+	return func(oc *optionCtx) {
+		oc.appendQueryNameToSpan = enabled
 	}
 }

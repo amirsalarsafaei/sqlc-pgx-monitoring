@@ -245,7 +245,7 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 func (s *DBTracerSuite) TestTraceQueryStart() {
 	// Setup expectations
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.query", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -270,7 +270,7 @@ func (s *DBTracerSuite) TestTraceQueryStart() {
 
 func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.query", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -310,7 +310,7 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 
 func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.query", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -356,7 +356,7 @@ func (s *DBTracerSuite) TestTraceQueryEndOnError() {
 
 func (s *DBTracerSuite) TestTraceQueryDuration() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.query", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -397,7 +397,7 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 
 func (s *DBTracerSuite) TestTraceBatchDuration() {
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.batch",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.batch", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -453,7 +453,7 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.prepare", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -497,7 +497,7 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 	stmtName := "get_user_by_id"
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.prepare", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -541,7 +541,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 	expectedErr := errors.New("prepare failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.prepare",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.prepare", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -586,7 +586,7 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 func (s *DBTracerSuite) TestTraceConnectSuccess() {
 	connConfig := &pgx.ConnConfig{}
 
-	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect",mock.AnythingOfType("trace.spanOptionFunc")).
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
@@ -615,7 +615,7 @@ func (s *DBTracerSuite) TestTraceConnectError() {
 	connConfig := &pgx.ConnConfig{}
 	expectedErr := errors.New("connection failed")
 
-	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect",mock.AnythingOfType("trace.spanOptionFunc")).
+	s.tracer.EXPECT().Start(mock.Anything, "postgresql.connect", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
@@ -647,7 +647,7 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 	columnNames := []string{"id", "name"}
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.copy_from",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.copy_from", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -690,7 +690,7 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 	expectedErr := errors.New("copy failed")
 
 	s.tracer.EXPECT().
-		Start(s.ctx, "postgresql.copy_from",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(s.ctx, "postgresql.copy_from", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span)
 
 	s.span.EXPECT().
@@ -738,7 +738,7 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 
 	// Set up expectations for multiple queries
 	s.tracer.EXPECT().
-		Start(mock.Anything, "postgresql.query",mock.AnythingOfType("trace.spanOptionFunc")).
+		Start(mock.Anything, "postgresql.query", mock.AnythingOfType("trace.spanOptionFunc")).
 		Return(s.ctx, s.span).
 		Times(numQueries)
 
@@ -916,7 +916,7 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 }
 
 func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
-	s.tracer.EXPECT().Start(s.ctx, "postgresql.batch",mock.AnythingOfType("trace.spanOptionFunc")).Return(s.ctx, s.span)
+	s.tracer.EXPECT().Start(s.ctx, "postgresql.batch", mock.AnythingOfType("trace.spanOptionFunc")).Return(s.ctx, s.span)
 	s.span.EXPECT().SetAttributes(PGXOperationTypeKey.String("batch")).Return()
 
 	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
@@ -1036,4 +1036,118 @@ func (s *DBTracerSuite) TestQueryNameExtractionEdgeCases() {
 			s.Equal(tc.expectedType, queryType)
 		})
 	}
+}
+
+func (s *DBTracerSuite) TestTraceQueryStart_WithAppendQueryNameToSpan() {
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithShouldLog(s.shouldLog()),
+		WithLogger(s.logger),
+		WithAppendQueryNameToSpan(true),
+	)
+	s.Require().NoError(err)
+	dbTracer := tracer.(*dbTracer)
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.query/get_users", mock.AnythingOfType("trace.spanOptionFunc")).
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+			PGXOperationTypeKey.String("query"),
+		).
+		Return()
+
+	ctx := dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+		SQL:  s.defaultQuerySQL,
+		Args: []interface{}{1},
+	})
+
+	s.NotNil(ctx)
+	queryData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
+	s.NotNil(queryData)
+	s.Equal(s.defaultQuerySQL, queryData.sql)
+	s.Equal([]interface{}{1}, queryData.args)
+}
+
+func (s *DBTracerSuite) TestTracePrepareStart_WithAppendQueryNameToSpan() {
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithShouldLog(s.shouldLog()),
+		WithLogger(s.logger),
+		WithAppendQueryNameToSpan(true),
+	)
+	s.Require().NoError(err)
+	dbTracer := tracer.(*dbTracer)
+
+	stmtName := "get_user_by_id"
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.prepare/get_users", mock.AnythingOfType("trace.spanOptionFunc")).
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(
+			PGXOperationTypeKey.String("prepare"),
+			PGXPrepareStmtNameKey.String(stmtName),
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+		).
+		Return()
+
+	ctx := dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
+		Name: stmtName,
+		SQL:  s.defaultQuerySQL,
+	})
+
+	s.NotNil(ctx)
+	prepareData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
+	s.NotNil(prepareData)
+	s.Equal(s.defaultQuerySQL, prepareData.sql)
+	s.Equal("get_users", prepareData.queryName)
+}
+
+func (s *DBTracerSuite) TestTraceBatchQuery_WithAppendQueryNameToSpan() {
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithShouldLog(s.shouldLog()),
+		WithLogger(s.logger),
+		WithAppendQueryNameToSpan(true),
+	)
+	s.Require().NoError(err)
+	dbTracer := tracer.(*dbTracer)
+
+	s.tracer.EXPECT().
+		Start(s.ctx, "postgresql.batch", mock.AnythingOfType("trace.spanOptionFunc")).
+		Return(s.ctx, s.span)
+
+	s.span.EXPECT().
+		SetAttributes(PGXOperationTypeKey.String("batch")).
+		Return()
+
+	ctx := dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
+
+	s.span.EXPECT().
+		SetAttributes(
+			SQLCQueryNameKey.String("get_users"),
+			SQLCQueryTypeKey.String("one"),
+		).
+		Return()
+
+	s.span.EXPECT().SetName("get_users").Return()
+	s.span.EXPECT().SetStatus(codes.Ok, "").Return()
+
+	dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
+		SQL:        s.defaultQuerySQL,
+		Args:       []any{1},
+		CommandTag: pgconn.CommandTag{},
+	})
 }

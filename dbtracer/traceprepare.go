@@ -2,6 +2,7 @@ package dbtracer
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -26,7 +27,12 @@ func (dt *dbTracer) TracePrepareStart(
 	data pgx.TracePrepareStartData,
 ) context.Context {
 	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.startSpan(ctx, "postgresql.prepare")
+	suffix := ""
+	if dt.appendQueryNameToSpan && queryName != "unknown" {
+		suffix = fmt.Sprintf("/%s", queryName)
+	}
+	name := fmt.Sprintf("postgresql.prepare%s", suffix)
+	ctx, span := dt.startSpan(ctx, name)
 	span.SetAttributes(
 		PGXOperationTypeKey.String("prepare"),
 		PGXPrepareStmtNameKey.String(data.Name),

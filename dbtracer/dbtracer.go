@@ -30,15 +30,16 @@ type Tracer interface {
 
 // dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
 type dbTracer struct {
-	logger           *slog.Logger
-	shouldLog        ShouldLog
-	databaseName     string
-	logArgs          bool
-	logArgsLenLimit  int
-	histogram        metric.Float64Histogram
-	traceProvider    trace.TracerProvider
-	traceLibraryName string
-	includeQueryText bool
+	logger                *slog.Logger
+	shouldLog             ShouldLog
+	databaseName          string
+	logArgs               bool
+	logArgsLenLimit       int
+	histogram             metric.Float64Histogram
+	traceProvider         trace.TracerProvider
+	traceLibraryName      string
+	includeQueryText      bool
+	appendQueryNameToSpan bool
 }
 
 func NewDBTracer(
@@ -85,15 +86,16 @@ func NewDBTracer(
 	}
 
 	return &dbTracer{
-		logger:           optCtx.logger,
-		databaseName:     databaseName,
-		shouldLog:        optCtx.shouldLog,
-		logArgs:          optCtx.logArgs,
-		logArgsLenLimit:  optCtx.logArgsLenLimit,
-		histogram:        histogram,
-		traceProvider:    optCtx.traceProvider,
-		traceLibraryName: optCtx.name,
-		includeQueryText: optCtx.includeSQLText,
+		logger:                optCtx.logger,
+		databaseName:          databaseName,
+		shouldLog:             optCtx.shouldLog,
+		logArgs:               optCtx.logArgs,
+		logArgsLenLimit:       optCtx.logArgsLenLimit,
+		histogram:             histogram,
+		traceProvider:         optCtx.traceProvider,
+		traceLibraryName:      optCtx.name,
+		includeQueryText:      optCtx.includeSQLText,
+		appendQueryNameToSpan: optCtx.appendQueryNameToSpan,
 	}, nil
 }
 
