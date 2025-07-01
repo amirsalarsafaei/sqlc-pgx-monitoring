@@ -2,12 +2,9 @@ SQLC_VERSION := v1.20.0
 
 .PHONY: clean generate gen-mocks gen-sqlc check-sqlc
 
-generate: clean gen-sqlc gen-mocks
+generate: clean gen-sqlc
 	@go generate ./...
 
-gen-mocks: 
-	mockery
-	
 gen-sqlc: check-sqlc
 	sqlc generate -f ./internal/example/db/sqlc.yaml
 
