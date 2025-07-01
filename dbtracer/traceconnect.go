@@ -16,7 +16,7 @@ type traceConnectData struct {
 }
 
 func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
-	ctx, span := dt.startSpan(ctx, "postgresql.connect")
+	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.connect", nil))
 
 	return context.WithValue(ctx, dbTracerConnectCtxKey, &traceConnectData{
 		startTime:  time.Now(),
@@ -31,7 +31,7 @@ func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEn
 	endTime := time.Now()
 	interval := endTime.Sub(connectData.startTime)
 
-	dt.recordHistogramMetric(ctx, "connect", "connect", interval, data.Err)
+	dt.recordHistogramMetric(ctx, "connect", nil, interval, data.Err)
 
 	defer connectData.span.End()
 

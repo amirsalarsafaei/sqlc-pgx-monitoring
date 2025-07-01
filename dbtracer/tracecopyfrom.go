@@ -19,11 +19,11 @@ type traceCopyFromData struct {
 }
 
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
-	ctx, span := dt.startSpan(ctx, "postgresql.copy_from")
-	span.SetAttributes(
+	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.copy_from", nil),
 		PGXOperationTypeKey.String("copy_from"),
 		attribute.String("db.table", data.TableName.Sanitize()),
 	)
+
 	return context.WithValue(ctx, dbTracerCopyFromCtxKey, &traceCopyFromData{
 		startTime:   time.Now(),
 		TableName:   data.TableName,
@@ -38,7 +38,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 
 	endTime := time.Now()
 	interval := endTime.Sub(copyFromData.startTime)
-	dt.recordHistogramMetric(ctx, "copy_from", "copy_from", interval, data.Err)
+	dt.recordHistogramMetric(ctx, "copy_from", nil, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
