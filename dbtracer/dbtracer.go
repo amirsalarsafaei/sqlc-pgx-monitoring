@@ -206,16 +206,6 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	return logArgs
 }
 
-func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	ctx, span := dt.getTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			semconv.DBSystemPostgreSQL,
-			semconv.DBNamespace(dt.databaseName),
-		))
-
-	return ctx, span
-}
-
 func (dt *dbTracer) spanName(operationName string, qMD *queryMetadata) string {
 	if !dt.includeSpanNameSuffix || qMD == nil {
 		return operationName
