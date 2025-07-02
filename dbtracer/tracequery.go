@@ -15,23 +15,34 @@ type traceQueryData struct {
 	args      []any      // 24 bytes
 	span      trace.Span // 16 bytes
 	sql       string     // 16 bytes
-	queryName string     // 16 bytes
-	queryType string     // 16 bytes
-	startTime time.Time  // 8 bytes
+	qMD       *queryMetadata
+	startTime time.Time // 8 bytes
 }
+
+var pgxOperationQuery = PGXOperationTypeKey.String("query")
 
 func (dt *dbTracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
-	queryName, queryType := queryNameFromSQL(data.SQL)
-	ctx, span := dt.startSpan(ctx, "postgresql.query")
-	span.SetAttributes(
-		SQLCQueryNameKey.String(queryName),
-		SQLCQueryTypeKey.String(queryType),
-		PGXOperationTypeKey.String("query"),
+	qMD := queryMetadataFromSQL(data.SQL)
+
+	spanName := dt.spanName("postgresql.query", qMD)
+
+	ctx, span := dt.getTracer().Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...),
+		trace.WithAttributes(pgxOperationQuery),
 	)
+
+	if qMD != nil {
+		span.SetAttributes(
+			SQLCQueryNameKey.String(qMD.name),
+			SQLCQueryCommandKey.String(qMD.command),
+			semconv.DBOperationName(qMD.name),
+		)
+	}
 
 	if dt.includeQueryText {
 		span.SetAttributes(semconv.DBQueryText(data.SQL))
@@ -41,40 +52,44 @@ func (dt *dbTracer) TraceQueryStart(
 		startTime: time.Now(),
 		sql:       data.SQL,
 		args:      data.Args,
-		queryName: queryName,
-		queryType: queryType,
+		qMD:       qMD,
 		span:      span,
 	})
 }
 
 func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
-	queryData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
+	traceData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
 
 	endTime := time.Now()
-	interval := endTime.Sub(queryData.startTime)
+	interval := endTime.Sub(traceData.startTime)
 
-	dt.recordHistogramMetric(ctx, "query", queryData.queryName, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "query", traceData.qMD, interval, data.Err)
 
-	defer queryData.span.End()
+	defer traceData.span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(queryData.span, data.Err)
+		dt.recordSpanError(traceData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		queryData.span.SetStatus(codes.Ok, "")
+		traceData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
 		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
-		logAttrs = append(logAttrs, slog.String("sql", queryData.sql),
-			slog.String("query_name", queryData.queryName),
-			slog.Any("args", dt.logQueryArgs(queryData.args)),
-			slog.String("query_type", queryData.queryType),
+		if traceData.qMD != nil {
+			logAttrs = append(logAttrs,
+				slog.String("query_name", traceData.qMD.name),
+				slog.String("query_command", traceData.qMD.command),
+			)
+		}
+
+		logAttrs = append(logAttrs, slog.String("sql", traceData.sql),
+			slog.Any("args", dt.logQueryArgs(traceData.args)),
 			slog.Duration("time", interval),
 			slog.Uint64("pid", uint64(extractConnectionID(conn))),
 		)

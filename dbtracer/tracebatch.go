@@ -7,21 +7,25 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type traceBatchData struct {
 	span      trace.Span // 16 bytes
 	startTime time.Time  // 16 bytes
-	queryName string     // 16 bytes
 }
 
+var (
+	pgxOperationBatch = PGXOperationTypeKey.String("batch")
+)
+
 func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	ctx, span := dt.startSpan(ctx, "postgresql.batch")
-	span.SetAttributes(
-		PGXOperationTypeKey.String("batch"),
-	)
+
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.batch", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...
+		), trace.WithAttributes(pgxOperationBatch))
+
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
 		startTime: time.Now(),
 		span:      span,
@@ -29,32 +33,21 @@ func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.Trac
 }
 
 func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchQueryData) {
-	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
-	if queryData == nil {
+	traceData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if traceData == nil {
 		return
-	}
-	queryName, queryType := queryNameFromSQL(data.SQL)
-	queryData.queryName = queryName
-
-	queryData.span.SetAttributes(
-		SQLCQueryNameKey.String(queryName),
-		SQLCQueryTypeKey.String(queryType),
-	)
-	queryData.span.SetName(queryName)
-	if dt.includeQueryText {
-		queryData.span.SetAttributes(semconv.DBQueryText(data.SQL))
 	}
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		queryData.span.SetStatus(codes.Error, data.Err.Error())
-		queryData.span.RecordError(data.Err)
+		traceData.span.SetStatus(codes.Error, data.Err.Error())
+		traceData.span.RecordError(data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		queryData.span.SetStatus(codes.Ok, "")
+		traceData.span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
 		level = slog.LevelInfo
 	}
@@ -73,26 +66,26 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 }
 
 func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchEndData) {
-	queryData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
-	if queryData == nil {
+	traceData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if traceData == nil {
 		return
 	}
-	defer queryData.span.End()
+	defer traceData.span.End()
 
 	endTime := time.Now()
-	interval := endTime.Sub(queryData.startTime)
+	interval := endTime.Sub(traceData.startTime)
 
-	dt.recordHistogramMetric(ctx, "batch", queryData.queryName, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "batch", nil, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(queryData.span, data.Err)
+		dt.recordSpanError(traceData.span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		queryData.span.SetStatus(codes.Ok, "")
+		traceData.span.SetStatus(codes.Ok, "")
 		level = slog.LevelInfo
 	}
 

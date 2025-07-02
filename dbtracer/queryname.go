@@ -5,11 +5,17 @@ import (
 )
 
 // sqlc queries are declared after a sql command in the form of -- name: TheQueryName :type
-var queryNameRegex = regexp.MustCompile(`^(?:--|/\*)\s+name:\s+(?P<name>\w+) :(?P<type>\w+)`)
+var queryNameRegex = regexp.MustCompile(`^(?:--|/\*)\s+name:\s+(?P<name>\w+) :(?P<command>\w+)`)
 
-func queryNameFromSQL(sql string) (string, string) {
+type queryMetadata struct{
+	name string
+	command string
+}
+
+func queryMetadataFromSQL(sql string) (*queryMetadata) {
 	if !queryNameRegex.MatchString(sql) {
-		return "unknown", "unknown"
+		return nil
 	}
-	return queryNameRegex.FindStringSubmatch(sql)[1], queryNameRegex.FindStringSubmatch(sql)[2]
+
+	return &queryMetadata{name: queryNameRegex.FindStringSubmatch(sql)[1], command: queryNameRegex.FindStringSubmatch(sql)[2]}
 }

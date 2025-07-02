@@ -11,7 +11,9 @@ import (
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -26,19 +28,30 @@ type Tracer interface {
 	pgx.CopyFromTracer
 	pgx.QueryTracer
 	pgx.PrepareTracer
+	pgxpool.AcquireTracer
+	pgxpool.ReleaseTracer
 }
 
 // dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
 type dbTracer struct {
-	logger           *slog.Logger
-	shouldLog        ShouldLog
-	databaseName     string
-	logArgs          bool
-	logArgsLenLimit  int
-	histogram        metric.Float64Histogram
-	traceProvider    trace.TracerProvider
-	traceLibraryName string
-	includeQueryText bool
+	logger          *slog.Logger
+	shouldLog       ShouldLog
+	databaseName    string
+	logArgs         bool
+	logArgsLenLimit int
+
+	dbOperationsHist metric.Float64Histogram
+
+	acquireConnectionHist metric.Float64Histogram
+	connAcquireCounter metric.Int64Counter
+	connReleaseCounter metric.Int64Counter
+
+	infoAttrs []attribute.KeyValue
+
+	traceProvider         trace.TracerProvider
+	traceLibraryName      string
+	includeQueryText      bool
+	includeSpanNameSuffix bool
 }
 
 func NewDBTracer(
@@ -83,17 +96,22 @@ func NewDBTracer(
 	if err != nil {
 		return nil, fmt.Errorf("initializing histogram meter: [%w]", err)
 	}
-
+	infoSet := attribute.NewSet(
+			semconv.DBSystemPostgreSQL,
+			semconv.DBNamespace(databaseName),
+		)
 	return &dbTracer{
-		logger:           optCtx.logger,
-		databaseName:     databaseName,
-		shouldLog:        optCtx.shouldLog,
-		logArgs:          optCtx.logArgs,
-		logArgsLenLimit:  optCtx.logArgsLenLimit,
-		histogram:        histogram,
-		traceProvider:    optCtx.traceProvider,
-		traceLibraryName: optCtx.name,
-		includeQueryText: optCtx.includeSQLText,
+		logger:                optCtx.logger,
+		databaseName:          databaseName,
+		shouldLog:             optCtx.shouldLog,
+		logArgs:               optCtx.logArgs,
+		logArgsLenLimit:       optCtx.logArgsLenLimit,
+		dbOperationsHist:      histogram,
+		traceProvider:         optCtx.traceProvider,
+		traceLibraryName:      optCtx.name,
+		includeQueryText:      optCtx.includeSQLText,
+		includeSpanNameSuffix: optCtx.includeSpanNameSuffix,
+		infoAttrs: infoSet.ToSlice(),
 	}, nil
 }
 
@@ -106,10 +124,11 @@ const (
 	dbTracerCopyFromCtxKey
 	dbTracerConnectCtxKey
 	dbTracerPrepareCtxKey
+	dbTracerAcquireCtxKey
 )
 
 func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 
@@ -120,12 +139,21 @@ func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
 	}
 }
 
-func (dt *dbTracer) recordHistogramMetric(ctx context.Context, pgxOperation string, queryName string, duration time.Duration, err error) {
-	dt.histogram.Record(ctx, duration.Seconds(), metric.WithAttributes(
+func (dt *dbTracer) recordDBOperationHistogramMetric(ctx context.Context,
+	pgxOperation string, qMD *queryMetadata, duration time.Duration, err error) {
+	attrs := []attribute.KeyValue{
 		PGXStatusKey.String(pgxStatusFromErr(err)),
 		PGXOperationTypeKey.String(pgxOperation),
-		SQLCQueryNameKey.String(queryName),
-	))
+	}
+
+	if qMD != nil {
+		attrs = append(attrs, SQLCQueryNameKey.String(qMD.name),
+			SQLCQueryCommandKey.String(qMD.command))
+	}
+
+	dt.dbOperationsHist.Record(ctx, duration.Seconds(),
+		metric.WithAttributes(dt.infoAttrs...),
+		metric.WithAttributes(attrs...))
 }
 
 func pgxStatusFromErr(err error) string {
@@ -179,14 +207,12 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	return logArgs
 }
 
-func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
-	ctx, span := dt.getTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient))
-	span.SetAttributes(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(dt.databaseName),
-	)
+func (dt *dbTracer) spanName(operationName string, qMD *queryMetadata) string {
+	if !dt.includeSpanNameSuffix || qMD == nil {
+		return operationName
+	}
 
-	return ctx, span
+	return fmt.Sprintf("%s %s", operationName, qMD.name)
 }
 
 func (dt *dbTracer) getTracer() trace.Tracer {

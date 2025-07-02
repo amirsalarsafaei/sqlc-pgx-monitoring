@@ -23,6 +23,7 @@ type optionCtx struct {
 	logArgs         bool
 	logArgsLenLimit int
 	includeSQLText  bool
+	includeSpanNameSuffix  bool
 }
 
 type Option func(*optionCtx)
@@ -74,5 +75,11 @@ func WithLogArgsLenLimit(limit int) Option {
 func WithIncludeSQLText(includeSQLText bool) Option {
 	return func(oc *optionCtx) {
 		oc.includeSQLText = includeSQLText
+	}
+}
+
+func WithIncludeSpanNameSuffix(includeSpanNameSuffix bool) Option {
+	return func (oc *optionCtx)  {
+		oc.includeSpanNameSuffix = includeSpanNameSuffix
 	}
 }
