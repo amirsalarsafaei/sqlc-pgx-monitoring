@@ -12,29 +12,42 @@ import (
 )
 
 const (
+	// instrumentationName is the name of the instrumentation library.
 	instrumentationName = "github.com/amirsalarsafaei/sqlc-pgx-monitoring"
-	stateKey            = attribute.Key("state")
-	reasonKey           = attribute.Key("reason")
+	// stateKey is an attribute key for the state of a connection (e.g., "used", "idle").
+	stateKey = attribute.Key("state")
+	// reasonKey is an attribute key for the reason a connection was closed (e.g., "lifetime", "idletime").
+	reasonKey = attribute.Key("reason")
 )
 
 var (
-	stateUsed      = stateKey.String("used")
-	stateIdle      = stateKey.String("idle")
+	// stateUsed is an attribute for a connection that is currently in use.
+	stateUsed = stateKey.String("used")
+	// stateIdle is an attribute for a connection that is currently idle.
+	stateIdle = stateKey.String("idle")
+	// reasonLifetime is an attribute for a connection closed due to exceeding its maximum lifetime.
 	reasonLifetime = reasonKey.String("lifetime")
+	// reasonIdleTime is an attribute for a connection closed due to exceeding its maximum idle time.
 	reasonIdleTime = reasonKey.String("idletime")
 )
 
+// Stater is an interface that provides access to pgxpool statistics.
+// It is implemented by *pgxpool.Pool.
 type Stater interface {
 	Stat() *pgxpool.Stat
 }
 
+// config holds the configuration for the metrics registration.
 type config struct {
 	meter      metric.Meter
 	attributes []attribute.KeyValue
 }
 
+// Option is a function that configures the metrics registration.
 type Option func(*config)
 
+// WithMeterProvider sets the OpenTelemetry MeterProvider to be used for metrics.
+// If not provided, the global MeterProvider will be used.
 func WithMeterProvider(provider metric.MeterProvider) Option {
 	return func(c *config) {
 		c.meter = provider.Meter(
@@ -43,6 +56,16 @@ func WithMeterProvider(provider metric.MeterProvider) Option {
 	}
 }
 
+// WithAttributes adds a set of attributes to all registered metrics.
+func WithAttributes(attrs ...attribute.KeyValue) Option {
+	return func(c *config) {
+		c.attributes = attrs
+	}
+}
+
+// Register registers the pgxpool metrics with OpenTelemetry.
+// It takes a Stater (like *pgxpool.Pool) and optional configuration.
+// It returns an error if any of the metrics fail to register.
 func Register(stater Stater, opts ...Option) error {
 	cfg := &config{
 		meter: otel.GetMeterProvider().Meter(
@@ -92,6 +115,7 @@ func Register(stater Stater, opts ...Option) error {
 	canceledAcquireCount, err := cfg.meter.Int64ObservableCounter(
 		"pgx.pool.canceled_acquires",
 		metric.WithDescription("Cumulative count of acquires from the pool that were canceled by a context."),
+		metric.WithUnit("{request}"),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create canceled acquire count metric: %w", err)
@@ -99,7 +123,8 @@ func Register(stater Stater, opts ...Option) error {
 
 	waitedForAcquireCount, err := cfg.meter.Int64ObservableCounter(
 		"pgx.pool.waited_for_acquires",
-		metric.WithDescription("Cumulative count of acquires that waited for a resource to be released or constructed."),
+		metric.WithDescription("Cumulative count of acquires that waited for a resource to be released or constructed because the pool was empty."),
+		metric.WithUnit("{request}"),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create waited for acquire count metric: %w", err)
@@ -116,7 +141,7 @@ func Register(stater Stater, opts ...Option) error {
 
 	connsDestroyed, err := cfg.meter.Int64ObservableCounter(
 		"pgx.pool.connections.destroyed",
-		metric.WithDescription("Cumulative count of connections destroyed, with a reason."),
+		metric.WithDescription("Cumulative count of connections destroyed, with a reason attribute."),
 		metric.WithUnit("{connection}"),
 	)
 	if err != nil {
@@ -132,30 +157,47 @@ func Register(stater Stater, opts ...Option) error {
 		return fmt.Errorf("failed to create acquire duration metric: %w", err)
 	}
 
+	// This is the newly added metric.
+	waitedForAcquireDuration, err := cfg.meter.Float64ObservableCounter(
+		"pgx.pool.acquire.wait.duration",
+		metric.WithDescription("The cumulative time successful acquires from the pool waited for a resource to be released or constructed because the pool was empty."),
+		metric.WithUnit("s"),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create waited for acquire duration metric: %w", err)
+	}
+
 	_, err = cfg.meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
 			stats := stater.Stat()
 			obsOpts := metric.WithAttributes(cfg.attributes...)
 
+			// Gauges
 			o.ObserveInt64(usage, int64(stats.AcquiredConns()), metric.WithAttributes(stateUsed), obsOpts)
 			o.ObserveInt64(usage, int64(stats.IdleConns()), metric.WithAttributes(stateIdle), obsOpts)
 			o.ObserveInt64(maxConns, int64(stats.MaxConns()), obsOpts)
 			o.ObserveInt64(pending, int64(stats.ConstructingConns()), obsOpts)
 
+			// Counters
 			o.ObserveInt64(acquireCount, stats.AcquireCount(), obsOpts)
 			o.ObserveInt64(canceledAcquireCount, stats.CanceledAcquireCount(), obsOpts)
 			o.ObserveInt64(waitedForAcquireCount, stats.EmptyAcquireCount(), obsOpts)
 			o.ObserveInt64(connsCreated, stats.NewConnsCount(), obsOpts)
-			o.ObserveFloat64(acquireDuration, stats.AcquireDuration().Seconds(), obsOpts)
 
 			o.ObserveInt64(connsDestroyed, stats.MaxLifetimeDestroyCount(), metric.WithAttributes(reasonLifetime), obsOpts)
 			o.ObserveInt64(connsDestroyed, stats.MaxIdleDestroyCount(), metric.WithAttributes(reasonIdleTime), obsOpts)
 
+			// Duration Counters
+			o.ObserveFloat64(acquireDuration, stats.AcquireDuration().Seconds(), obsOpts)
+			// Observe the newly added metric.
+			o.ObserveFloat64(waitedForAcquireDuration, stats.EmptyAcquireWaitTime().Seconds(), obsOpts)
+
 			return nil
 		},
-		usage, maxConns, pending, acquireCount, canceledAcquireCount, waitedForAcquireCount, connsCreated, connsDestroyed, acquireDuration,
+		// Register all instruments with the callback.
+		usage, maxConns, pending, acquireCount, canceledAcquireCount, waitedForAcquireCount,
+		connsCreated, connsDestroyed, acquireDuration, waitedForAcquireDuration,
 	)
-
 	if err != nil {
 		return fmt.Errorf("failed to register metric callback: %w", err)
 	}
