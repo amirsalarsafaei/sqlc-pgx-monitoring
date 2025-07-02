@@ -372,7 +372,7 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Error() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("query"),
+		pgxOperationQuery,
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
@@ -478,7 +478,7 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("batch"),
+		pgxOperationBatch,
 		PGXStatusKey.String("OK"),
 	)
 	s.EqualAttributeSet(expectedAttrs, point.Attributes)
@@ -539,7 +539,7 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("prepare"),
+		pgxOperationPrepare,
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
@@ -594,7 +594,7 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("prepare"),
+		pgxOperationPrepare,
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
@@ -715,7 +715,7 @@ func (s *DBTracerSuite) TestTraceConnectSuccess() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("connect"),
+		pgxOperationConnect,
 		PGXStatusKey.String("OK"),
 	)
 	s.EqualAttributeSet(expectedAttrs, point.Attributes)
@@ -826,7 +826,7 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("copy_from"),
+		pgxOperationCopyFrom,
 		PGXStatusKey.String("OK"),
 	)
 	s.EqualAttributeSet(expectedAttrs, point.Attributes)
@@ -883,17 +883,15 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
-
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
-		PGXOperationTypeKey.String("copy_from"),
+		pgxOperationCopyFrom,
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 	)
 	s.EqualAttributeSet(expectedAttrs, point.Attributes)
 }
 
 func (s *DBTracerSuite) TestTraceConcurrent() {
-	// Test concurrent queries to ensure thread safety
 	const numQueries = 10
 	var wg sync.WaitGroup
 
@@ -926,17 +924,12 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 		s.Equal(codes.Ok, span.Status().Code)
 
 		attrs := span.Attributes()
-		attrMap := make(map[attribute.Key]string)
-		for _, attr := range attrs {
-			if attr.Value.Type() == attribute.STRING {
-				attrMap[attr.Key] = attr.Value.AsString()
-			}
-		}
-		s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-		s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-		s.Equal("query", attrMap[PGXOperationTypeKey])
-		s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-		s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
+		attrMap := s.attributesToMap(attrs)
+		s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
+		s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
+		s.Equal("query", attrMap[PGXOperationTypeKey].AsString())
+		s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
+		s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey].AsString())
 	}
 
 	// Verify metrics were aggregated correctly
