@@ -19,15 +19,23 @@ type tracePrepareData struct {
 	statementName string // 16 bytes
 }
 
+var pgxOperationPrepare = PGXOperationTypeKey.String("prepare")
+
 func (dt *dbTracer) TracePrepareStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TracePrepareStartData,
 ) context.Context {
 	qMD := queryMetadataFromSQL(data.SQL)
-	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.prepare", qMD),
-		PGXOperationTypeKey.String("prepare"),
-		PGXPrepareStmtNameKey.String(data.Name),
+
+	spanName := dt.spanName("postgresql.prepare", qMD)
+
+	ctx, span := dt.getTracer().Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...),
+		trace.WithAttributes(
+			pgxOperationPrepare,
+			PGXPrepareStmtNameKey.String(data.Name)),
 	)
 
 	if qMD != nil {
@@ -47,7 +55,7 @@ func (dt *dbTracer) TracePrepareStart(
 		statementName: data.Name,
 		span:          span,
 		sql:           data.SQL,
-		qMD: qMD,
+		qMD:           qMD,
 	})
 }
 
@@ -61,7 +69,7 @@ func (dt *dbTracer) TracePrepareEnd(
 
 	endTime := time.Now()
 	interval := endTime.Sub(traceData.startTime)
-	dt.recordHistogramMetric(ctx, "prepare", traceData.qMD, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "prepare", traceData.qMD, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level

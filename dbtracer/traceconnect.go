@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -15,8 +16,14 @@ type traceConnectData struct {
 	connConfig *pgx.ConnConfig
 }
 
+var pgxOperationConnect = PGXOperationTypeKey.String("connect")
+
 func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
-	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.connect", nil))
+
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.connect", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...),
+		trace.WithAttributes(pgxOperationConnect))
 
 	return context.WithValue(ctx, dbTracerConnectCtxKey, &traceConnectData{
 		startTime:  time.Now(),
@@ -26,31 +33,32 @@ func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnect
 }
 
 func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEndData) {
-	connectData := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
+	traceData := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
 
 	endTime := time.Now()
-	interval := endTime.Sub(connectData.startTime)
+	interval := endTime.Sub(traceData.startTime)
 
-	dt.recordHistogramMetric(ctx, "connect", nil, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "connect", nil, interval, data.Err)
 
-	defer connectData.span.End()
+	defer traceData.span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(connectData.span, data.Err)
+		dt.recordSpanError(traceData.span, data.Err)
 		logAttrs = append(logAttrs, slog.Any("error", data.Err))
 		level = slog.LevelError
 	} else {
+		traceData.span.SetStatus(codes.Ok, "")
 		level = slog.LevelInfo
 	}
 
 	if dt.shouldLog(data.Err) {
 		logAttrs = append(logAttrs,
-			slog.String("host", connectData.connConfig.Host),
-			slog.Uint64("port", uint64(connectData.connConfig.Port)),
-			slog.String("database", connectData.connConfig.Database),
+			slog.String("host", traceData.connConfig.Host),
+			slog.Uint64("port", uint64(traceData.connConfig.Port)),
+			slog.String("database", traceData.connConfig.Database),
 			slog.Duration("time", interval),
 		)
 

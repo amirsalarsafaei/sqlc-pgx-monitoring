@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgconn"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -27,22 +28,32 @@ type Tracer interface {
 	pgx.CopyFromTracer
 	pgx.QueryTracer
 	pgx.PrepareTracer
+	pgxpool.AcquireTracer
+	pgxpool.ReleaseTracer
 }
 
 // dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
 type dbTracer struct {
-	logger                *slog.Logger
-	shouldLog             ShouldLog
-	databaseName          string
-	logArgs               bool
-	logArgsLenLimit       int
-	histogram             metric.Float64Histogram
+	logger          *slog.Logger
+	shouldLog       ShouldLog
+	databaseName    string
+	logArgs         bool
+	logArgsLenLimit int
+
+	dbOperationsHist metric.Float64Histogram
+
+	poolOperationsHist metric.Float64Histogram
+	connAcquireCounter metric.Int64Counter
+	connReleaseCounter metric.Int64Counter
+
+	infoAttrs []attribute.KeyValue
+	traceSetupConfig trace.SpanConfig
+
 	traceProvider         trace.TracerProvider
 	traceLibraryName      string
 	includeQueryText      bool
 	includeSpanNameSuffix bool
 }
-
 
 func NewDBTracer(
 	databaseName string,
@@ -86,18 +97,22 @@ func NewDBTracer(
 	if err != nil {
 		return nil, fmt.Errorf("initializing histogram meter: [%w]", err)
 	}
-
+	infoSet := attribute.NewSet(
+			semconv.DBSystemPostgreSQL,
+			semconv.DBNamespace(databaseName),
+		)
 	return &dbTracer{
 		logger:                optCtx.logger,
 		databaseName:          databaseName,
 		shouldLog:             optCtx.shouldLog,
 		logArgs:               optCtx.logArgs,
 		logArgsLenLimit:       optCtx.logArgsLenLimit,
-		histogram:             histogram,
+		dbOperationsHist:      histogram,
 		traceProvider:         optCtx.traceProvider,
 		traceLibraryName:      optCtx.name,
 		includeQueryText:      optCtx.includeSQLText,
 		includeSpanNameSuffix: optCtx.includeSpanNameSuffix,
+		infoAttrs: infoSet.ToSlice(),
 	}, nil
 }
 
@@ -110,6 +125,7 @@ const (
 	dbTracerCopyFromCtxKey
 	dbTracerConnectCtxKey
 	dbTracerPrepareCtxKey
+	dbTracerAcquireCtxKey
 )
 
 func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
@@ -124,7 +140,8 @@ func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
 	}
 }
 
-func (dt *dbTracer) recordHistogramMetric(ctx context.Context, pgxOperation string, qMD *queryMetadata, duration time.Duration, err error) {
+func (dt *dbTracer) recordDBOperationHistogramMetric(ctx context.Context,
+	pgxOperation string, qMD *queryMetadata, duration time.Duration, err error) {
 	attrs := []attribute.KeyValue{
 		PGXStatusKey.String(pgxStatusFromErr(err)),
 		PGXOperationTypeKey.String(pgxOperation),
@@ -135,7 +152,7 @@ func (dt *dbTracer) recordHistogramMetric(ctx context.Context, pgxOperation stri
 			SQLCQueryCommandKey.String(qMD.command))
 	}
 
-	dt.histogram.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+	dt.dbOperationsHist.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
 func pgxStatusFromErr(err error) string {
@@ -189,7 +206,7 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 	return logArgs
 }
 
-func (dt *dbTracer) startSpan(ctx context.Context, name string, extraAttrs ...attribute.KeyValue) (context.Context, trace.Span) {
+func (dt *dbTracer) startSpan(ctx context.Context, name string) (context.Context, trace.Span) {
 	ctx, span := dt.getTracer().Start(ctx, name, trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			semconv.DBSystemPostgreSQL,
@@ -200,7 +217,7 @@ func (dt *dbTracer) startSpan(ctx context.Context, name string, extraAttrs ...at
 }
 
 func (dt *dbTracer) spanName(operationName string, qMD *queryMetadata) string {
-	if dt.includeSpanNameSuffix || qMD == nil {
+	if !dt.includeSpanNameSuffix || qMD == nil {
 		return operationName
 	}
 

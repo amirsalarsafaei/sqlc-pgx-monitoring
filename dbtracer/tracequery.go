@@ -19,14 +19,21 @@ type traceQueryData struct {
 	startTime time.Time // 8 bytes
 }
 
+var pgxOperationQuery = PGXOperationTypeKey.String("query")
+
 func (dt *dbTracer) TraceQueryStart(
 	ctx context.Context,
 	_ *pgx.Conn,
 	data pgx.TraceQueryStartData,
 ) context.Context {
 	qMD := queryMetadataFromSQL(data.SQL)
-	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.query", qMD),
-		PGXOperationTypeKey.String("query"),
+
+	spanName := dt.spanName("postgresql.query", qMD)
+
+	ctx, span := dt.getTracer().Start(ctx, spanName, trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...),
+		trace.WithAttributes(pgxOperationQuery),
 	)
 
 	if qMD != nil {
@@ -56,7 +63,7 @@ func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	endTime := time.Now()
 	interval := endTime.Sub(traceData.startTime)
 
-	dt.recordHistogramMetric(ctx, "query", traceData.qMD, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "query", traceData.qMD, interval, data.Err)
 
 	defer traceData.span.End()
 

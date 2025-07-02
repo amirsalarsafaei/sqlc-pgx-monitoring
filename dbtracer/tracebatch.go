@@ -15,10 +15,16 @@ type traceBatchData struct {
 	startTime time.Time  // 16 bytes
 }
 
-func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-	spanName := dt.spanName("postgresql.batch", nil)
+var (
+	pgxOperationBatch = PGXOperationTypeKey.String("batch")
+)
 
-	ctx, span := dt.startSpan(ctx, spanName, PGXOperationTypeKey.String("batch"))
+func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
+
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.batch", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...
+		), trace.WithAttributes(pgxOperationBatch))
 
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
 		startTime: time.Now(),
@@ -69,7 +75,7 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	endTime := time.Now()
 	interval := endTime.Sub(traceData.startTime)
 
-	dt.recordHistogramMetric(ctx, "batch", nil, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "batch", nil, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level

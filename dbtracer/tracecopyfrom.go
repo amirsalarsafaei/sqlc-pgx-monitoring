@@ -6,22 +6,28 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type traceCopyFromData struct {
-	ColumnNames []string       // 24 bytes
-	span        trace.Span     // 16 bytes
-	startTime   time.Time      // 16 bytes
-	TableName   pgx.Identifier // slice - 24 bytes
+	ColumnNames []string
+	span        trace.Span
+	startTime   time.Time
+	TableName   pgx.Identifier
 }
 
+var pgxOperationCopyFrom = PGXOperationTypeKey.String("copy_from")
+
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
-	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.copy_from", nil),
-		PGXOperationTypeKey.String("copy_from"),
-		attribute.String("db.table", data.TableName.Sanitize()),
+
+	ctx, span := dt.getTracer().Start(ctx, "postgresql.copy_from", trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			dt.infoAttrs...),
+		trace.WithAttributes(
+			pgxOperationCopyFrom,
+			semconv.DBCollectionName(data.TableName.Sanitize())),
 	)
 
 	return context.WithValue(ctx, dbTracerCopyFromCtxKey, &traceCopyFromData{
@@ -38,7 +44,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 
 	endTime := time.Now()
 	interval := endTime.Sub(copyFromData.startTime)
-	dt.recordHistogramMetric(ctx, "copy_from", nil, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "copy_from", nil, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
@@ -61,7 +67,7 @@ func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data p
 		)
 
 		dt.logger.LogAttrs(ctx, level,
-			"copyfrom",
+			"copy_from",
 			logAttrs...,
 		)
 	}

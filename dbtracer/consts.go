@@ -10,4 +10,7 @@ const (
 	PGXStatusKey          = attribute.Key("pgx.status")
 
 	DBStatusCodeKey = attribute.Key("db.response.status_code")
+
+	PGXPoolConnOperationKey = attribute.Key("pgx.pool.operation")
 )
+
