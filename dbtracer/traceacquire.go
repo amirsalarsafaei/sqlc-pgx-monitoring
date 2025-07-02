@@ -58,6 +58,10 @@ func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, dat
 		PGXStatusKey.String(pgxStatusFromErr(data.Err)),
 	))
 
+	dt.acquireConnectionHist.Record(ctx, time.Since(traceData.startTime).Seconds(), 
+		metric.WithAttributes(dt.infoAttrs...),
+		metric.WithAttributes(PGXStatusKey.String(pgxStatusFromErr(data.Err))))
+
 	if dt.shouldLog(data.Err) {
 		logAttrs = append(logAttrs, slog.Uint64("pid", uint64(extractConnectionID(data.Conn))))
 

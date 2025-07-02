@@ -42,12 +42,11 @@ type dbTracer struct {
 
 	dbOperationsHist metric.Float64Histogram
 
-	poolOperationsHist metric.Float64Histogram
+	acquireConnectionHist metric.Float64Histogram
 	connAcquireCounter metric.Int64Counter
 	connReleaseCounter metric.Int64Counter
 
 	infoAttrs []attribute.KeyValue
-	traceSetupConfig trace.SpanConfig
 
 	traceProvider         trace.TracerProvider
 	traceLibraryName      string
@@ -152,7 +151,9 @@ func (dt *dbTracer) recordDBOperationHistogramMetric(ctx context.Context,
 			SQLCQueryCommandKey.String(qMD.command))
 	}
 
-	dt.dbOperationsHist.Record(ctx, duration.Seconds(), metric.WithAttributes(attrs...))
+	dt.dbOperationsHist.Record(ctx, duration.Seconds(),
+		metric.WithAttributes(dt.infoAttrs...),
+		metric.WithAttributes(attrs...))
 }
 
 func pgxStatusFromErr(err error) string {

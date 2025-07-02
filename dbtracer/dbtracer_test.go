@@ -13,8 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/stretchr/testify/assert"
 	"github.com/pmezard/go-difflib/difflib"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -310,6 +310,8 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		pgxOperationQuery,
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
@@ -368,6 +370,8 @@ func (s *DBTracerSuite) TestTraceQueryEnd_Error() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("query"),
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
@@ -414,7 +418,9 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
-		PGXOperationTypeKey.String("query"),
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
+		pgxOperationQuery,
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
@@ -470,6 +476,8 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("batch"),
 		PGXStatusKey.String("OK"),
 	)
@@ -529,6 +537,8 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("prepare"),
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
@@ -582,6 +592,8 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("prepare"),
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
@@ -642,7 +654,9 @@ func (s *DBTracerSuite) TestTracePrepareError() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
-		PGXOperationTypeKey.String("prepare"),
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
+		pgxOperationPrepare,
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
@@ -699,6 +713,8 @@ func (s *DBTracerSuite) TestTraceConnectSuccess() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("connect"),
 		PGXStatusKey.String("OK"),
 	)
@@ -752,7 +768,9 @@ func (s *DBTracerSuite) TestTraceConnectError() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
-		PGXOperationTypeKey.String("connect"),
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
+		pgxOperationConnect,
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 	)
 	s.EqualAttributeSet(expectedAttrs, point.Attributes)
@@ -806,6 +824,8 @@ func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("copy_from"),
 		PGXStatusKey.String("OK"),
 	)
@@ -863,6 +883,9 @@ func (s *DBTracerSuite) TestTraceCopyFromError() {
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
+
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
 		PGXOperationTypeKey.String("copy_from"),
 		PGXStatusKey.String("UNKNOWN_ERROR"),
 	)
@@ -926,7 +949,9 @@ func (s *DBTracerSuite) TestTraceConcurrent() {
 	s.True(point.Sum > 0, "Expected positive sum of all durations")
 
 	expectedAttrs := attribute.NewSet(
-		PGXOperationTypeKey.String("query"),
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
+		pgxOperationQuery,
 		PGXStatusKey.String("OK"),
 		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
 		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
