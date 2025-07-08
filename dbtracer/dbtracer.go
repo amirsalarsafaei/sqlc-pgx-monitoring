@@ -43,8 +43,8 @@ type dbTracer struct {
 	dbOperationsHist metric.Float64Histogram
 
 	acquireConnectionHist metric.Float64Histogram
-	connAcquireCounter metric.Int64Counter
-	connReleaseCounter metric.Int64Counter
+	connAcquireCounter    metric.Int64Counter
+	connReleaseCounter    metric.Int64Counter
 
 	infoAttrs []attribute.KeyValue
 
@@ -94,12 +94,38 @@ func NewDBTracer(
 		metric.WithUnit(optCtx.latencyHistogramConfig.unit),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("initializing histogram meter: [%w]", err)
+		return nil, fmt.Errorf("initializing histogram meter: %w", err)
 	}
+
+	connAcquireHist, err := meter.Float64Histogram(
+		"pgx.pool.trace.acquire.duration",
+		metric.WithDescription(""),
+		metric.WithUnit("{connection}"),
+	)
+
+	connAcquireMeter, err := meter.Int64Counter(
+		"pgx.pool.trace.acquire.count",
+		metric.WithDescription(""),
+		metric.WithUnit("{connection}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initializing trace connection acquire meter: %w", err)
+	}
+
+	connReleaseMeter, err := meter.Int64Counter(
+		"pgx.pool.trace.release.count",
+		metric.WithDescription(""),
+		metric.WithUnit("{connection}"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initializing trace connection release meter: %w", err)
+	}
+
 	infoSet := attribute.NewSet(
-			semconv.DBSystemPostgreSQL,
-			semconv.DBNamespace(databaseName),
-		)
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(databaseName),
+	)
+
 	return &dbTracer{
 		logger:                optCtx.logger,
 		databaseName:          databaseName,
@@ -111,7 +137,10 @@ func NewDBTracer(
 		traceLibraryName:      optCtx.name,
 		includeQueryText:      optCtx.includeSQLText,
 		includeSpanNameSuffix: optCtx.includeSpanNameSuffix,
-		infoAttrs: infoSet.ToSlice(),
+		infoAttrs:             infoSet.ToSlice(),
+		acquireConnectionHist: connAcquireHist,
+		connAcquireCounter:    connAcquireMeter,
+		connReleaseCounter:    connReleaseMeter,
 	}, nil
 }
 

@@ -3,8 +3,8 @@ package poolstatus
 import (
 	"context"
 	"fmt"
+	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -31,10 +31,25 @@ var (
 	reasonIdleTime = reasonKey.String("idletime")
 )
 
-// Stater is an interface that provides access to pgxpool statistics.
+type Stat interface {
+	AcquireCount() int64
+	AcquireDuration() time.Duration
+	AcquiredConns() int32
+	CanceledAcquireCount() int64
+	ConstructingConns() int32
+	EmptyAcquireCount() int64
+	EmptyAcquireWaitTime() time.Duration
+	IdleConns() int32
+	MaxConns() int32
+	MaxIdleDestroyCount() int64
+	MaxLifetimeDestroyCount() int64
+	NewConnsCount() int64
+	TotalConns() int32
+}
+
 // It is implemented by *pgxpool.Pool.
 type Stater interface {
-	Stat() *pgxpool.Stat
+	Stat() Stat
 }
 
 // config holds the configuration for the metrics registration.
