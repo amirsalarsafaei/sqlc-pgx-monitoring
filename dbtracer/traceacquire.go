@@ -39,13 +39,15 @@ func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, dat
 	if traceData == nil {
 		return
 	}
+	defer traceData.span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		traceData.span.SetStatus(codes.Error, data.Err.Error())
 		traceData.span.RecordError(data.Err)
+		traceData.span.SetStatus(codes.Error, data.Err.Error())
+
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
@@ -55,12 +57,10 @@ func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, dat
 
 	dt.connAcquireCounter.Add(ctx, 1, metric.WithAttributes(
 		pgxPoolConnOperationAcquire,
-		PGXStatusKey.String(pgxStatusFromErr(data.Err)),
 	))
 
 	dt.acquireConnectionHist.Record(ctx, time.Since(traceData.startTime).Seconds(), 
-		metric.WithAttributes(dt.infoAttrs...),
-		metric.WithAttributes(PGXStatusKey.String(pgxStatusFromErr(data.Err))))
+		metric.WithAttributes(dt.infoAttrs...))
 
 	if dt.shouldLog(data.Err) {
 		logAttrs = append(logAttrs, slog.Uint64("pid", uint64(extractConnectionID(data.Conn))))

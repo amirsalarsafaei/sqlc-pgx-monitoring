@@ -13,6 +13,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/pmezard/go-difflib/difflib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -45,6 +46,7 @@ type DBTracerSuite struct {
 	logger          *slog.Logger
 	ctx             context.Context
 	pgxConn         *pgx.Conn
+	pgxPool         *pgxpool.Pool
 	dbTracer        Tracer
 	defaultDBName   string
 	defaultQuerySQL queryTestData
@@ -110,6 +112,9 @@ func (s *DBTracerSuite) SetupTest() {
 		sdkmetric.WithReader(s.metricReader),
 	)
 	s.meter = s.meterProvider.Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring")
+
+	s.pgxConn = &pgx.Conn{}
+	s.pgxPool = &pgxpool.Pool{}
 
 	var err error
 	s.histogram, err = s.meter.Float64Histogram(
@@ -1233,20 +1238,17 @@ func (s *DBTracerSuite) TestTraceQueryStart_WithSpanNameSuffix() {
 	s.Equal(s.defaultQuerySQL.statement, traceData.sql)
 	s.Equal([]interface{}{1}, traceData.args)
 
-	// End the query to finalize the span
 	tracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
 		CommandTag: pgconn.CommandTag{},
 		Err:        nil,
 	})
 
-	// Verify span was created with query name appended
 	spans := s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 	span := spans[0]
 	s.Equal("postgresql.query get_users", span.Name())
 	s.Equal(codes.Ok, span.Status().Code)
 
-	// Check span attributes
 	attrs := span.Attributes()
 	attrMap := make(map[attribute.Key]string)
 	for _, attr := range attrs {
@@ -1285,13 +1287,11 @@ func (s *DBTracerSuite) TestTracePrepareStart() {
 	s.Equal(s.defaultQuerySQL.statement, prepareData.sql)
 	s.Equal(s.defaultQuerySQL.name, prepareData.qMD.name)
 
-	// End the prepare to finalize the span
 	tracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
 		AlreadyPrepared: false,
 		Err:             nil,
 	})
 
-	// Verify span was created with query name appended
 	spans := s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 	span := spans[0]
@@ -1340,6 +1340,36 @@ func (s *DBTracerSuite) TestTraceBatchQuery() {
 	attrMap := s.attributesToMap(attrs)
 
 	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
+	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
+	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
+}
+
+func (s *DBTracerSuite) TestTraceAcquire() {
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithShouldLog(s.shouldLog()),
+		WithLogger(s.logger),
+	)
+	s.Require().NoError(err)
+
+	ctx := tracer.TraceAcquireStart(s.ctx, s.pgxPool, pgxpool.TraceAcquireStartData{})
+	tracer.TraceAcquireEnd(ctx, s.pgxPool, pgxpool.TraceAcquireEndData{Conn: s.pgxConn, Err: nil})
+
+	spans := s.spanRecorder.Ended()
+	s.Require().Len(spans, 1)
+
+	span := spans[0]
+	s.Equal("pgxpool.acquire", span.Name())
+	s.Equal(codes.Ok, span.Status().Code)
+
+	attrs := span.Attributes()
+	s.Len(attrs, 3)
+
+	attrMap := s.attributesToMap(attrs)
+
+	s.Equal("acquire", attrMap[PGXPoolConnOperationKey].AsString())
 	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
 	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
 }

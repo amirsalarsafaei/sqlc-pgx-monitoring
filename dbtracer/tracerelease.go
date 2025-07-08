@@ -12,6 +12,6 @@ var pgxPoolConnOperationReleased = PGXPoolConnOperationKey.String("release")
 // TraceRelease implements Tracer.
 func (dt *dbTracer) TraceRelease(pool *pgxpool.Pool, data pgxpool.TraceReleaseData) {
 	dt.connReleaseCounter.Add(context.Background(), 1, metric.WithAttributes(
-pgxPoolConnOperationReleased,
+		pgxPoolConnOperationReleased,
 	))
 }
