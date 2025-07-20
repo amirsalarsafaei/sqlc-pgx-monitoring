@@ -1,0 +1,279 @@
+{
+  "title": "Jaeger Tracing - SQLC-PGX",
+  "uid": "jaeger-tracing-sqlc-pgx",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
+  "timezone": "",
+  "id": null,
+  "style": "dark",
+  "schemaVersion": 38,
+  "templating": {
+    "list": [
+      {
+        "current": {
+          "selected": false,
+          "text": "sqlc-pgx-monitoring-example",
+          "value": "sqlc-pgx-monitoring-example"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Service",
+        "multi": false,
+        "name": "service",
+        "options": [],
+        "query": "label_values(service_name)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "type": "query",
+        "datasource": {
+          "type": "jaeger",
+          "uid": "jaeger"
+        }
+      }
+    ]
+  },
+  "timepicker": {},
+  "weekStart": "",
+  "version": 0,
+  "panels": [
+    {
+      "datasource": {
+        "uid": "jaeger",
+        "type": "jaeger"
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "h": 20,
+        "w": 24
+      },
+      "options": {
+        "query": {
+          "service": "${service}",
+          "operation": "",
+          "tags": "",
+          "minDuration": "",
+          "maxDuration": "",
+          "limit": 20
+        }
+      },
+      "title": "Database Operation Traces",
+      "type": "jaeger"
+    },
+    {
+      "datasource": {
+        "uid": "prometheus",
+        "type": "prometheus"
+      },
+      "id": 2,
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "mappings": [],
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "vis": false,
+              "legend": false,
+              "tooltip": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 80,
+                "color": "red"
+              }
+            ],
+            "mode": "absolute"
+          }
+        }
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "h": 8,
+        "w": 12
+      },
+      "options": {
+        "tooltip": {
+          "sort": "none",
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        }
+      },
+      "title": "Trace Duration by Operation",
+      "targets": [
+        {
+          "datasource": {
+            "uid": "prometheus",
+            "type": "prometheus"
+          },
+          "intervalFactor": 1,
+          "legendFormat": "{{operation}} (avg)",
+          "refId": "A",
+          "expr": "avg by (operation) (traces_spanmetrics_latency_sum / traces_spanmetrics_latency_count)",
+          "format": "time_series"
+        }
+      ],
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "uid": "prometheus",
+        "type": "prometheus"
+      },
+      "id": 3,
+      "fieldConfig": {
+        "overrides": [],
+        "defaults": {
+          "mappings": [],
+          "unit": "reqps",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "hideFrom": {
+              "vis": false,
+              "legend": false,
+              "tooltip": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "thresholds": {
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              },
+              {
+                "value": 80,
+                "color": "red"
+              }
+            ],
+            "mode": "absolute"
+          }
+        }
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 20,
+        "h": 8,
+        "w": 12
+      },
+      "options": {
+        "tooltip": {
+          "sort": "none",
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": []
+        }
+      },
+      "title": "Trace Rate by Service",
+      "targets": [
+        {
+          "datasource": {
+            "uid": "prometheus",
+            "type": "prometheus"
+          },
+          "intervalFactor": 1,
+          "legendFormat": "{{service_name}}",
+          "refId": "A",
+          "expr": "sum by (service_name) (rate(traces_spanmetrics_calls_total[5m]))",
+          "format": "time_series"
+        }
+      ],
+      "type": "timeseries"
+    }
+  ],
+  "links": [],
+  "refresh": "30s",
+  "tags": ["tracing", "jaeger", "database", "sqlc", "pgx"],
+  "annotations": {
+    "list": [
+      {
+        "datasource": {
+          "uid": "grafana",
+          "type": "datasource"
+        },
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard",
+        "hide": true,
+        "enable": true,
+        "builtIn": 1
+      }
+    ]
+  },
+  "time": {
+    "to": "now",
+    "from": "now-1h"
+  }
+}
+

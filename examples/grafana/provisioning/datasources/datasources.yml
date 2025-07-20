@@ -1,0 +1,58 @@
+apiVersion: 1
+
+datasources:
+  # Prometheus data source for metrics
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    uid: prometheus
+    isDefault: true
+    editable: true
+    jsonData:
+      httpMethod: POST
+      manageAlerts: true
+      prometheusType: Prometheus
+      prometheusVersion: 2.40.0
+      cacheLevel: "High"
+      disableRecordingRules: false
+      incrementalQueryOverlapWindow: 10m
+
+  # OTEL Collector Prometheus metrics
+  - name: OTEL-Collector
+    type: prometheus
+    access: proxy
+    url: http://otel-collector:8889
+    uid: otel-collector
+    editable: true
+    jsonData:
+      httpMethod: POST
+      prometheusType: Prometheus
+      prometheusVersion: 2.40.0
+      cacheLevel: "High"
+
+  # Jaeger data source for traces
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686/api
+    uid: jaeger
+    editable: true
+    jsonData:
+      tracesToMetrics:
+        datasourceUid: "prometheus"
+        spanStartTimeShift: "1h"
+        spanEndTimeShift: "-1h"
+        tags: [{key: "service.name", value: "service"}, {key: "job"}]
+        queries:
+          - name: "Sample query"
+            query: "sum(rate(traces_spanmetrics_latency_bucket{$$__tags}[5m]))"
+      serviceMap:
+        datasourceUid: "prometheus"
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      spanBar:
+        type: "Tag"
+        tag: "http.path"

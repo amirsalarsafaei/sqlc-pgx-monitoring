@@ -102,6 +102,9 @@ func NewDBTracer(
 		metric.WithDescription(""),
 		metric.WithUnit("{connection}"),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("initializing trace connection acquire meter: %w", err)
+	}
 
 	connAcquireMeter, err := meter.Int64Counter(
 		"pgx.pool.trace.acquire.count",

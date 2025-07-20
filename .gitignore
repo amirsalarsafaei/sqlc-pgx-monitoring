@@ -110,6 +110,7 @@ fabric.properties
 
 # Go workspace file
 go.work
+go.work.sum
 
 ### macOS template
 # General

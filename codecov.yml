@@ -12,4 +12,3 @@ coverage:
 ignore:
   - "**/mock_*.go"
   - "examples/"
-

@@ -1,4 +1,4 @@
-package poolstatus_test
+package poolstatus
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/poolstatus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -33,28 +32,28 @@ type mockStat struct {
 	totalConnsVal              int32
 }
 
-// Implement the poolstatus.Stat interface
-func (m *mockStat) AcquireCount() int64                   { return m.acquireCountVal }
-func (m *mockStat) AcquireDuration() time.Duration        { return m.acquireDurationVal }
-func (m *mockStat) AcquiredConns() int32                  { return m.acquiredConnsVal }
-func (m *mockStat) CanceledAcquireCount() int64             { return m.canceledAcquireCountVal }
-func (m *mockStat) ConstructingConns() int32              { return m.constructingConnsVal }
-func (m *mockStat) EmptyAcquireCount() int64                { return m.emptyAcquireCountVal }
-func (m *mockStat) EmptyAcquireWaitTime() time.Duration     { return m.emptyAcquireWaitTimeVal }
-func (m *mockStat) IdleConns() int32                      { return m.idleConnsVal }
-func (m *mockStat) MaxConns() int32                       { return m.maxConnsVal }
-func (m *mockStat) MaxIdleDestroyCount() int64            { return m.maxIdleDestroyCountVal }
-func (m *mockStat) MaxLifetimeDestroyCount() int64        { return m.maxLifetimeDestroyCountVal }
-func (m *mockStat) NewConnsCount() int64                  { return m.newConnsCountVal }
-func (m *mockStat) TotalConns() int32                     { return m.totalConnsVal }
+// Implement the Stat interface
+func (m *mockStat) AcquireCount() int64                 { return m.acquireCountVal }
+func (m *mockStat) AcquireDuration() time.Duration      { return m.acquireDurationVal }
+func (m *mockStat) AcquiredConns() int32                { return m.acquiredConnsVal }
+func (m *mockStat) CanceledAcquireCount() int64         { return m.canceledAcquireCountVal }
+func (m *mockStat) ConstructingConns() int32            { return m.constructingConnsVal }
+func (m *mockStat) EmptyAcquireCount() int64            { return m.emptyAcquireCountVal }
+func (m *mockStat) EmptyAcquireWaitTime() time.Duration { return m.emptyAcquireWaitTimeVal }
+func (m *mockStat) IdleConns() int32                    { return m.idleConnsVal }
+func (m *mockStat) MaxConns() int32                     { return m.maxConnsVal }
+func (m *mockStat) MaxIdleDestroyCount() int64          { return m.maxIdleDestroyCountVal }
+func (m *mockStat) MaxLifetimeDestroyCount() int64      { return m.maxLifetimeDestroyCountVal }
+func (m *mockStat) NewConnsCount() int64                { return m.newConnsCountVal }
+func (m *mockStat) TotalConns() int32                   { return m.totalConnsVal }
 
-// mockStater implements the poolstatus.Stater interface for testing.
+// mockStater implements the Stater interface for testing.
 type mockStater struct {
-	stats poolstatus.Stat
+	stats Stat
 }
 
-// Stat returns the mock stats, satisfying the poolstatus.Stater interface.
-func (m *mockStater) Stat() poolstatus.Stat {
+// Stat returns the mock stats, satisfying the Stater interface.
+func (m *mockStater) Stat() Stat {
 	return m.stats
 }
 
@@ -63,7 +62,7 @@ type PoolStatusTestSuite struct {
 	suite.Suite
 	reader   *metric.ManualReader
 	provider *metric.MeterProvider
-	stater   poolstatus.Stater
+	stater   stater
 	stats    *mockStat
 	ctx      context.Context
 }
@@ -95,9 +94,8 @@ func TestPoolStatusSuite(t *testing.T) {
 	suite.Run(t, new(PoolStatusTestSuite))
 }
 
-
 func (s *PoolStatusTestSuite) TestRegisterMetrics_DefaultOptions() {
-	err := poolstatus.Register(s.stater, poolstatus.WithMeterProvider(s.provider))
+	err := register(s.stater, WithMeterProvider(s.provider))
 	s.Require().NoError(err, "Register should not return an error")
 
 	rm := s.collectMetrics()
@@ -110,9 +108,9 @@ func (s *PoolStatusTestSuite) TestRegisterMetrics_WithAttributes() {
 		attribute.String("service.name", "my-app"),
 	}
 
-	err := poolstatus.Register(s.stater,
-		poolstatus.WithMeterProvider(s.provider),
-		poolstatus.WithAttributes(commonAttrs...),
+	err := register(s.stater,
+		WithMeterProvider(s.provider),
+		WithAttributes(commonAttrs...),
 	)
 	s.Require().NoError(err, "Register should not return an error")
 
@@ -123,13 +121,12 @@ func (s *PoolStatusTestSuite) TestRegisterMetrics_WithAttributes() {
 func (s *PoolStatusTestSuite) TestRegisterMetrics_ErrorOnRegistration() {
 	mockProvider := &erroringMeterProvider{err: errors.New("registration failed")}
 
-	err := poolstatus.Register(s.stater, poolstatus.WithMeterProvider(mockProvider))
+	err := register(s.stater, WithMeterProvider(mockProvider))
 
 	s.Require().Error(err)
 	s.Assert().ErrorContains(err, "failed to create usage metric")
 	s.Assert().ErrorContains(err, "registration failed")
 }
-
 
 func (s *PoolStatusTestSuite) collectMetrics() metricdata.ResourceMetrics {
 	s.T().Helper()
@@ -140,7 +137,7 @@ func (s *PoolStatusTestSuite) collectMetrics() metricdata.ResourceMetrics {
 	return rm
 }
 
-func (s *PoolStatusTestSuite) assertAllMetrics(scopeMetrics metricdata.ScopeMetrics, stats poolstatus.Stat, commonAttrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertAllMetrics(scopeMetrics metricdata.ScopeMetrics, stats Stat, commonAttrs []attribute.KeyValue) {
 	s.T().Helper()
 	assert.Equal(s.T(), "github.com/amirsalarsafaei/sqlc-pgx-monitoring", scopeMetrics.Scope.Name)
 	require.NotEmpty(s.T(), scopeMetrics.Metrics, "should have registered metrics")
@@ -182,7 +179,7 @@ func (s *PoolStatusTestSuite) assertCommonAttributes(pointAttrs attribute.Set, c
 	}
 }
 
-func (s *PoolStatusTestSuite) assertUsageMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertUsageMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric(semconv.DBClientConnectionsUsageName, metrics)
 	s.Assert().Equal(semconv.DBClientConnectionsUsageDescription, m.Description)
@@ -211,7 +208,7 @@ func (s *PoolStatusTestSuite) assertUsageMetric(metrics []metricdata.Metrics, st
 	s.assertCommonAttributes(usedPoint.Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertMaxConnsMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertMaxConnsMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric(semconv.DBClientConnectionMaxName, metrics)
 	s.Assert().Equal(semconv.DBClientConnectionMaxDescription, m.Description)
@@ -220,7 +217,7 @@ func (s *PoolStatusTestSuite) assertMaxConnsMetric(metrics []metricdata.Metrics,
 	s.assertCommonAttributes(gauge[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertPendingMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertPendingMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric(semconv.DBClientConnectionsPendingRequestsName, metrics)
 	s.Assert().Equal(semconv.DBClientConnectionsPendingRequestsDescription, m.Description)
@@ -229,7 +226,7 @@ func (s *PoolStatusTestSuite) assertPendingMetric(metrics []metricdata.Metrics, 
 	s.assertCommonAttributes(gauge[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertAcquireCountMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.acquires", metrics)
 	s.Assert().Equal("Cumulative count of successful acquires from the pool.", m.Description)
@@ -238,7 +235,7 @@ func (s *PoolStatusTestSuite) assertAcquireCountMetric(metrics []metricdata.Metr
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertCanceledAcquireCountMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertCanceledAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.canceled_acquires", metrics)
 	s.Assert().Equal("Cumulative count of acquires from the pool that were canceled by a context.", m.Description)
@@ -247,7 +244,7 @@ func (s *PoolStatusTestSuite) assertCanceledAcquireCountMetric(metrics []metricd
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertWaitedForAcquireCountMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertWaitedForAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.waited_for_acquires", metrics)
 	s.Assert().Equal("Cumulative count of acquires that waited for a resource to be released or constructed because the pool was empty.", m.Description)
@@ -256,7 +253,7 @@ func (s *PoolStatusTestSuite) assertWaitedForAcquireCountMetric(metrics []metric
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertConnsCreatedMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertConnsCreatedMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.connections.created", metrics)
 	s.Assert().Equal("Cumulative count of new connections opened.", m.Description)
@@ -265,7 +262,7 @@ func (s *PoolStatusTestSuite) assertConnsCreatedMetric(metrics []metricdata.Metr
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertAcquireDurationMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertAcquireDurationMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.acquire.duration", metrics)
 	s.Assert().Equal("Total duration of all successful acquires from the pool.", m.Description)
@@ -274,7 +271,7 @@ func (s *PoolStatusTestSuite) assertAcquireDurationMetric(metrics []metricdata.M
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertWaitedForAcquireDurationMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertWaitedForAcquireDurationMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.acquire.wait.duration", metrics)
 	s.Assert().Equal("The cumulative time successful acquires from the pool waited for a resource to be released or constructed because the pool was empty.", m.Description)
@@ -283,7 +280,7 @@ func (s *PoolStatusTestSuite) assertWaitedForAcquireDurationMetric(metrics []met
 	s.assertCommonAttributes(sum[0].Attributes, attrs)
 }
 
-func (s *PoolStatusTestSuite) assertConnsDestroyedMetric(metrics []metricdata.Metrics, stats poolstatus.Stat, attrs []attribute.KeyValue) {
+func (s *PoolStatusTestSuite) assertConnsDestroyedMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
 	s.T().Helper()
 	m := s.findMetric("pgx.pool.connections.destroyed", metrics)
 	s.Assert().Equal("Cumulative count of connections destroyed, with a reason attribute.", m.Description)

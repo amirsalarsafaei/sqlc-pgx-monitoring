@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -49,6 +50,10 @@ type Stat interface {
 
 // It is implemented by *pgxpool.Pool.
 type Stater interface {
+	Stat() *pgxpool.Stat
+}
+
+type stater interface {
 	Stat() Stat
 }
 
@@ -78,10 +83,11 @@ func WithAttributes(attrs ...attribute.KeyValue) Option {
 	}
 }
 
-// Register registers the pgxpool metrics with OpenTelemetry.
-// It takes a Stater (like *pgxpool.Pool) and optional configuration.
-// It returns an error if any of the metrics fail to register.
 func Register(stater Stater, opts ...Option) error {
+	return register(newStaterWrapper(stater), opts...)
+}
+
+func register(stater stater, opts ...Option) error {
 	cfg := &config{
 		meter: otel.GetMeterProvider().Meter(
 			instrumentationName,
@@ -218,4 +224,17 @@ func Register(stater Stater, opts ...Option) error {
 	}
 
 	return nil
+}
+
+type staterWrapper struct {
+	s Stater
+}
+
+func (s *staterWrapper) Stat() Stat {
+	return s.s.Stat()
+}
+func newStaterWrapper(stater Stater) stater {
+	return &staterWrapper{
+		s: stater,
+	}
 }
