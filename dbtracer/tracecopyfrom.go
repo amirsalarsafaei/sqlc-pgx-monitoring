@@ -13,7 +13,6 @@ import (
 
 type traceCopyFromData struct {
 	ColumnNames []string
-	span        trace.Span
 	startTime   time.Time
 	TableName   pgx.Identifier
 }
@@ -22,7 +21,7 @@ var pgxOperationCopyFrom = PGXOperationTypeKey.String("copy_from")
 
 func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceCopyFromStartData) context.Context {
 
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.copy_from", trace.WithSpanKind(trace.SpanKindClient),
+	ctx, _ = dt.getTracer().Start(ctx, "postgresql.copy_from", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			dt.infoAttrs...),
 		trace.WithAttributes(
@@ -34,27 +33,33 @@ func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pg
 		startTime:   time.Now(),
 		TableName:   data.TableName,
 		ColumnNames: data.ColumnNames,
-		span:        span,
 	})
 }
 
 func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceCopyFromEndData) {
 	copyFromData := ctx.Value(dbTracerCopyFromCtxKey).(*traceCopyFromData)
-	defer copyFromData.span.End()
+	if copyFromData == nil {
+		return
+	}
 
-	endTime := time.Now()
-	interval := endTime.Sub(copyFromData.startTime)
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+	defer span.End()
+
+	interval := time.Since(copyFromData.startTime)
 	dt.recordDBOperationHistogramMetric(ctx, "copy_from", nil, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(copyFromData.span, data.Err)
+		dt.recordSpanError(span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		copyFromData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.Int64("rowCount", data.CommandTag.RowsAffected()))
 		level = slog.LevelInfo
 	}

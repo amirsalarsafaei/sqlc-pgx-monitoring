@@ -16,20 +16,18 @@ var (
 )
 
 type traceAcquireData struct {
-	span      trace.Span
 	startTime time.Time
 }
 
 // TraceAcquireStart implements Tracer.
 func (dt *dbTracer) TraceAcquireStart(ctx context.Context, pool *pgxpool.Pool, data pgxpool.TraceAcquireStartData) context.Context {
-	ctx, span := dt.getTracer().Start(ctx, "pgxpool.acquire", trace.WithSpanKind(trace.SpanKindClient),
+	ctx, _ = dt.getTracer().Start(ctx, "pgxpool.acquire", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			dt.infoAttrs...
 		), trace.WithAttributes(pgxPoolConnOperationAcquire))
 
 	return context.WithValue(ctx, dbTracerAcquireCtxKey, &traceAcquireData{
 		startTime: time.Now(),
-		span:      span,
 	})
 }
 
@@ -39,19 +37,24 @@ func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, dat
 	if traceData == nil {
 		return
 	}
-	defer traceData.span.End()
+
+	span := trace.SpanFromContext(ctx)
+	if  !span.SpanContext().IsValid() {
+		return 
+	}
+	defer span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		traceData.span.RecordError(data.Err)
-		traceData.span.SetStatus(codes.Error, data.Err.Error())
+		span.RecordError(data.Err)
+		span.SetStatus(codes.Error, data.Err.Error())
 
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		level = slog.LevelInfo
 	}
 

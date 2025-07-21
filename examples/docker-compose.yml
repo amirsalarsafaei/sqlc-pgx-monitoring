@@ -12,7 +12,6 @@ services:
     networks:
       - monitoring-network
 
-  # OpenTelemetry Collector
   otel-collector:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: monitoring-otel-collector

@@ -12,7 +12,6 @@ import (
 )
 
 type tracePrepareData struct {
-	span          trace.Span // 16 bytes
 	startTime     time.Time  // 16 bytes
 	qMD           *queryMetadata
 	sql           string // 16 bytes
@@ -46,14 +45,9 @@ func (dt *dbTracer) TracePrepareStart(
 		)
 	}
 
-	if dt.includeQueryText {
-		span.SetAttributes(semconv.DBQueryText(data.SQL))
-	}
-
 	return context.WithValue(ctx, dbTracerPrepareCtxKey, &tracePrepareData{
 		startTime:     time.Now(),
 		statementName: data.Name,
-		span:          span,
 		sql:           data.SQL,
 		qMD:           qMD,
 	})
@@ -65,21 +59,28 @@ func (dt *dbTracer) TracePrepareEnd(
 	data pgx.TracePrepareEndData,
 ) {
 	traceData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
-	defer traceData.span.End()
+	if traceData == nil {
+		return
+	}
 
-	endTime := time.Now()
-	interval := endTime.Sub(traceData.startTime)
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+	defer span.End()
+
+	interval := time.Since(traceData.startTime)
 	dt.recordDBOperationHistogramMetric(ctx, "prepare", traceData.qMD, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(traceData.span, data.Err)
+		dt.recordSpanError(span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.Bool("alreadyPrepared", data.AlreadyPrepared))
 		level = slog.LevelInfo
 	}
