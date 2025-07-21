@@ -11,7 +11,6 @@ import (
 )
 
 type traceConnectData struct {
-	span       trace.Span
 	startTime  time.Time
 	connConfig *pgx.ConnConfig
 }
@@ -20,7 +19,7 @@ var pgxOperationConnect = PGXOperationTypeKey.String("connect")
 
 func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnectStartData) context.Context {
 
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.connect", trace.WithSpanKind(trace.SpanKindClient),
+	ctx, _ = dt.getTracer().Start(ctx, "postgresql.connect", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			dt.infoAttrs...),
 		trace.WithAttributes(pgxOperationConnect))
@@ -28,29 +27,34 @@ func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnect
 	return context.WithValue(ctx, dbTracerConnectCtxKey, &traceConnectData{
 		startTime:  time.Now(),
 		connConfig: data.ConnConfig,
-		span:       span,
 	})
 }
 
 func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEndData) {
 	traceData := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
+	if traceData == nil {
+		return
+	}
 
-	endTime := time.Now()
-	interval := endTime.Sub(traceData.startTime)
+	interval := time.Since(traceData.startTime)
 
 	dt.recordDBOperationHistogramMetric(ctx, "connect", nil, interval, data.Err)
 
-	defer traceData.span.End()
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+	defer span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(traceData.span, data.Err)
+		dt.recordSpanError(span, data.Err)
 		logAttrs = append(logAttrs, slog.Any("error", data.Err))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		level = slog.LevelInfo
 	}
 

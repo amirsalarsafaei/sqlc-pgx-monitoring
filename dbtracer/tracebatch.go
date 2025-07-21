@@ -7,28 +7,51 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type traceBatchData struct {
-	span      trace.Span // 16 bytes
-	startTime time.Time  // 16 bytes
+	startTime       time.Time // 16 bytes
+	batchQuerySpans []trace.Span
+	batchIndex      int
 }
 
 var (
-	pgxOperationBatch = PGXOperationTypeKey.String("batch")
+	pgxOperationBatch      = PGXOperationTypeKey.String("batch")
+	pgxOperationBatchQuery = PGXOperationTypeKey.String("batch.query")
 )
 
-func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceBatchStartData) context.Context {
-
-	ctx, span := dt.getTracer().Start(ctx, "postgresql.batch", trace.WithSpanKind(trace.SpanKindClient),
+func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, batch pgx.TraceBatchStartData) context.Context {
+	ctx, _ = dt.getTracer().Start(ctx, "postgresql.batch", trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
-			dt.infoAttrs...
+			dt.infoAttrs...,
 		), trace.WithAttributes(pgxOperationBatch))
 
+	var batchQuerySpans []trace.Span
+	if batch.Batch != nil {
+		batchQuerySpans = make([]trace.Span, len(batch.Batch.QueuedQueries))
+		for i, q := range batch.Batch.QueuedQueries {
+			_, span := dt.getTracer().Start(ctx, "postgresql.batch.query", trace.WithSpanKind(trace.SpanKindClient),
+				trace.WithAttributes(dt.infoAttrs...), trace.WithAttributes(
+					pgxOperationBatchQuery))
+
+			qMD := queryMetadataFromSQL(q.SQL)
+			if qMD != nil {
+				span.SetAttributes(
+					SQLCQueryNameKey.String(qMD.name),
+					SQLCQueryCommandKey.String(qMD.command),
+					semconv.DBOperationName(qMD.name),
+				)
+			}
+
+			batchQuerySpans[i] = span
+		}
+	}
+
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
-		startTime: time.Now(),
-		span:      span,
+		startTime:       time.Now(),
+		batchQuerySpans: batchQuerySpans,
 	})
 }
 
@@ -38,16 +61,23 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		return
 	}
 
+	if traceData.batchIndex >= len(traceData.batchQuerySpans) {
+		return
+	}
+
+	span := traceData.batchQuerySpans[traceData.batchIndex]
+	defer span.End()
+	traceData.batchIndex++
+
 	var logAttrs []slog.Attr
 	var level slog.Level
-
 	if data.Err != nil {
-		traceData.span.SetStatus(codes.Error, data.Err.Error())
-		traceData.span.RecordError(data.Err)
+		span.SetStatus(codes.Error, data.Err.Error())
+		span.RecordError(data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
 		level = slog.LevelInfo
 	}
@@ -59,7 +89,7 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		)
 
 		dt.logger.LogAttrs(ctx, level,
-			"batch",
+			"batch query",
 			logAttrs...,
 		)
 	}
@@ -70,10 +100,14 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	if traceData == nil {
 		return
 	}
-	defer traceData.span.End()
 
-	endTime := time.Now()
-	interval := endTime.Sub(traceData.startTime)
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+	defer span.End()
+
+	interval := time.Since(traceData.startTime)
 
 	dt.recordDBOperationHistogramMetric(ctx, "batch", nil, interval, data.Err)
 
@@ -81,11 +115,11 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(traceData.span, data.Err)
+		dt.recordSpanError(span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		level = slog.LevelInfo
 	}
 

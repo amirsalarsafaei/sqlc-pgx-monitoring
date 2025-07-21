@@ -12,9 +12,8 @@ import (
 )
 
 type traceQueryData struct {
-	args      []any      // 24 bytes
-	span      trace.Span // 16 bytes
-	sql       string     // 16 bytes
+	args      []any  // 24 bytes
+	sql       string // 16 bytes
 	qMD       *queryMetadata
 	startTime time.Time // 8 bytes
 }
@@ -53,29 +52,34 @@ func (dt *dbTracer) TraceQueryStart(
 		sql:       data.SQL,
 		args:      data.Args,
 		qMD:       qMD,
-		span:      span,
 	})
 }
 
 func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
 	traceData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
+	if traceData == nil {
+		return
+	}
 
-	endTime := time.Now()
-	interval := endTime.Sub(traceData.startTime)
+	interval := time.Since(traceData.startTime)
 
 	dt.recordDBOperationHistogramMetric(ctx, "query", traceData.qMD, interval, data.Err)
 
-	defer traceData.span.End()
+	span := trace.SpanFromContext(ctx)
+	if !span.SpanContext().IsValid() {
+		return
+	}
+	defer span.End()
 
 	var logAttrs []slog.Attr
 	var level slog.Level
 
 	if data.Err != nil {
-		dt.recordSpanError(traceData.span, data.Err)
+		dt.recordSpanError(span, data.Err)
 		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
 		level = slog.LevelError
 	} else {
-		traceData.span.SetStatus(codes.Ok, "")
+		span.SetStatus(codes.Ok, "")
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
 		level = slog.LevelInfo
 	}

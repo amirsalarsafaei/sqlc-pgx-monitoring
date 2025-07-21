@@ -256,7 +256,7 @@ func (s *DBTracerSuite) TestTraceQueryStart() {
 	spans := s.spanRecorder.Ended()
 	s.Len(spans, 0, "span should not be ended yet")
 
-	span := queryData.span.(sdktrace.ReadOnlySpan)
+	span := trace.SpanFromContext(ctx).(sdktrace.ReadOnlySpan)
 	s.Equal("postgresql.query", span.Name())
 
 	attrs := span.Attributes()
@@ -447,7 +447,6 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 
 	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
 
-	// Verify spans
 	spans := s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 	span := spans[0]
@@ -464,22 +463,19 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 	}
 	s.Equal("batch", attrMap[PGXOperationTypeKey])
 
-	// Check that duration is approximately what we expected
 	duration := span.EndTime().Sub(span.StartTime())
 	s.True(duration >= 195*time.Millisecond, "Duration should be at least 195ms, got %v", duration)
 	s.True(duration <= 400*time.Millisecond, "Duration should be at most 400ms, got %v", duration)
 
-	// Verify metrics
 	histogramPoints := s.getHistogramPoints()
 	s.Require().Len(histogramPoints, 1)
 
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
-	// Duration should be approximately 0.2 seconds (200ms)
+
 	s.True(point.Sum >= 0.195, "Recorded duration should be at least 0.195s, got %v", point.Sum)
 	s.True(point.Sum <= 0.400, "Recorded duration should be at most 0.400s, got %v", point.Sum)
 
-	// Check attributes
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
 		semconv.DBNamespace(s.defaultDBName),
@@ -565,14 +561,12 @@ func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
 		AlreadyPrepared: true,
 	})
 
-	// Verify spans
 	spans := s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 	span := spans[0]
 	s.Equal("postgresql.prepare", span.Name())
 	s.Equal(codes.Ok, span.Status().Code)
 
-	// Check span attributes
 	attrs := span.Attributes()
 	attrMap := make(map[attribute.Key]string)
 	for _, attr := range attrs {
@@ -1071,8 +1065,7 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 		Args: []interface{}{1},
 	})
 
-	queryData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	span := queryData.span
+	span := trace.SpanFromContext(ctx)
 
 	dbTracer := s.dbTracer.(*dbTracer)
 
@@ -1085,38 +1078,32 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 	s.Require().Len(spans, 1)
 	s.Equal(codes.Unset, spans[0].Status().Code)
 
-	// Reset for next test
 	s.resetRecorders()
 
-	// Test with pgx.ErrNoRows (should not record error)
-	ctx2 := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+	ctx = s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
 		SQL:  s.defaultQuerySQL.statement,
 		Args: []interface{}{2},
 	})
 
-	queryData2 := ctx2.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	span2 := queryData2.span
+	span = trace.SpanFromContext(ctx)
 
-	span2.End()
+	span.End()
 
 	spans = s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 
-	// Reset for next test
 	s.resetRecorders()
 
-	// Test with regular error
-	ctx3 := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+	ctx = s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
 		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{3},
+		Args: []any{3},
 	})
 
-	queryData3 := ctx3.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	span3 := queryData3.span
+	span = trace.SpanFromContext(ctx)
 
 	testErr := errors.New("test error")
-	dbTracer.recordSpanError(span3, testErr)
-	span3.End()
+	dbTracer.recordSpanError(span, testErr)
+	span.End()
 
 	spans = s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
@@ -1131,18 +1118,30 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 
 func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
 	// Start batch
-	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
+	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{
+		Batch: &pgx.Batch{
+			QueuedQueries: []*pgx.QueuedQuery{
+				{
+					SQL:       s.defaultQuerySQL.statement,
+					Arguments: []any{1},
+					Fn:        nil,
+				},
+				{
+					SQL:       s.defaultQuerySQL.statement,
+					Arguments: []any{2},
+					Fn:        nil,
+				},
+			},
+		},
+	})
 
-	// First query (success)
 	s.dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
 		SQL:        s.defaultQuerySQL.statement,
 		Args:       []any{1},
 		CommandTag: pgconn.CommandTag{},
 	})
 
-	// Second query with error
 	batchErr := errors.New("batch query error")
-	// FIXME: the error is never recorded on a metric
 	s.dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
 		SQL:        s.defaultQuerySQL.statement,
 		Args:       []any{2},
@@ -1150,27 +1149,37 @@ func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
 		Err:        batchErr,
 	})
 
-	// End batch
-	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
+	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{Err: batchErr})
 
 	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.batch", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
+	s.Require().Len(spans, 3)
 
-	// Check span attributes
-	attrs := span.Attributes()
+	s.Equal("postgresql.batch.query", spans[0].Name())
+	s.Equal(codes.Ok, spans[0].Status().Code)
+
+	s.Equal("postgresql.batch.query", spans[1].Name())
+	s.Equal(codes.Error, spans[1].Status().Code)
+
+	s.Equal("postgresql.batch", spans[2].Name())
+	s.Equal(codes.Error, spans[2].Status().Code)
+
+	// check one of batch queries attrs
+	attrs := spans[0].Attributes()
 	attrMap := s.attributesToMap(attrs)
+	s.Equal("batch.query", attrMap[PGXOperationTypeKey].AsString())
+	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
+	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
+	s.Equal(s.defaultQuerySQL.name, attrMap[semconv.DBOperationNameKey].AsString())
+	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
+	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
+
+	// check batch end attrs
+	attrs = spans[2].Attributes()
+	attrMap = s.attributesToMap(attrs)
 
 	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
 	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
 	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-
-	// Verify that error events were recorded
-	events := span.Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
 
 	histogramPoints := s.getHistogramPoints()
 	s.Require().Len(histogramPoints, 1)
@@ -1181,7 +1190,6 @@ func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
 }
 
 func (s *DBTracerSuite) TestTraceWithIncludeSQLText() {
-	// Create tracer with includeSQLText enabled
 	tracer, err := NewDBTracer(
 		"test_db",
 		WithIncludeSQLText(true),
@@ -1195,7 +1203,6 @@ func (s *DBTracerSuite) TestTraceWithIncludeSQLText() {
 }
 
 func (s *DBTracerSuite) TestShouldLogFunctionality() {
-	// Test with custom shouldLog function that filters errors
 	customShouldLog := func(err error) bool {
 		return err != nil && !errors.Is(err, pgx.ErrNoRows)
 	}
@@ -1210,7 +1217,6 @@ func (s *DBTracerSuite) TestShouldLogFunctionality() {
 
 	dbTracer := tracer.(*dbTracer)
 
-	// Test the shouldLog function
 	s.True(dbTracer.shouldLog(errors.New("some error")))
 	s.False(dbTracer.shouldLog(pgx.ErrNoRows))
 	s.False(dbTracer.shouldLog(nil))
