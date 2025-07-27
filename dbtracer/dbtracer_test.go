@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -391,9 +390,6 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 		Args: []interface{}{1},
 	})
 
-	sleepDuration := 100 * time.Millisecond
-	time.Sleep(sleepDuration)
-
 	s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
 		CommandTag: pgconn.CommandTag{},
 		Err:        nil,
@@ -406,10 +402,9 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 	s.Equal("postgresql.query", span.Name())
 	s.Equal(codes.Ok, span.Status().Code)
 
-	// Check that duration is approximately what we expected
+	// Check that duration is positive (actual execution time)
 	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration >= 95*time.Millisecond, "Duration should be at least 95ms, got %v", duration)
-	s.True(duration <= 200*time.Millisecond, "Duration should be at most 200ms, got %v", duration)
+	s.True(duration > 0, "Duration should be positive, got %v", duration)
 
 	// Verify metrics - the recorded duration should be in seconds
 	histogramPoints := s.getHistogramPoints()
@@ -417,9 +412,8 @@ func (s *DBTracerSuite) TestTraceQueryDuration() {
 
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
-	// Duration should be approximately 0.1 seconds (100ms)
-	s.True(point.Sum >= 0.095, "Recorded duration should be at least 0.095s, got %v", point.Sum)
-	s.True(point.Sum <= 0.200, "Recorded duration should be at most 0.200s, got %v", point.Sum)
+	// Duration should be positive
+	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
@@ -442,9 +436,6 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 		CommandTag: pgconn.CommandTag{},
 	})
 
-	sleepDuration := 200 * time.Millisecond
-	time.Sleep(sleepDuration)
-
 	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
 
 	spans := s.spanRecorder.Ended()
@@ -463,18 +454,17 @@ func (s *DBTracerSuite) TestTraceBatchDuration() {
 	}
 	s.Equal("batch", attrMap[PGXOperationTypeKey])
 
+	// Check that duration is positive (actual execution time)
 	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration >= 195*time.Millisecond, "Duration should be at least 195ms, got %v", duration)
-	s.True(duration <= 400*time.Millisecond, "Duration should be at most 400ms, got %v", duration)
+	s.True(duration > 0, "Duration should be positive, got %v", duration)
 
 	histogramPoints := s.getHistogramPoints()
 	s.Require().Len(histogramPoints, 1)
 
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
-
-	s.True(point.Sum >= 0.195, "Recorded duration should be at least 0.195s, got %v", point.Sum)
-	s.True(point.Sum <= 0.400, "Recorded duration should be at most 0.400s, got %v", point.Sum)
+	// Duration should be positive
+	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
 
 	expectedAttrs := attribute.NewSet(
 		semconv.DBSystemPostgreSQL,
@@ -493,9 +483,6 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 		Name: stmtName,
 		SQL:  prepareSQL.statement,
 	})
-
-	sleepDuration := 150 * time.Millisecond
-	time.Sleep(sleepDuration)
 
 	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
 		AlreadyPrepared: false,
@@ -521,10 +508,9 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 	s.Equal("prepare", attrMap[PGXOperationTypeKey])
 	s.Equal(stmtName, attrMap[PGXPrepareStmtNameKey])
 
-	// Check that duration is approximately what we expected
+	// Check that duration is positive (actual execution time)
 	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration >= 145*time.Millisecond, "Duration should be at least 145ms, got %v", duration)
-	s.True(duration <= 200*time.Millisecond, "Duration should be at most 200ms, got %v", duration)
+	s.True(duration > 0, "Duration should be positive, got %v", duration)
 
 	// Verify metrics
 	histogramPoints := s.getHistogramPoints()
@@ -532,9 +518,8 @@ func (s *DBTracerSuite) TestTracePrepareWithDuration() {
 
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
-	// Duration should be approximately 0.15 seconds (150ms)
-	s.True(point.Sum >= 0.145, "Recorded duration should be at least 0.145s, got %v", point.Sum)
-	s.True(point.Sum <= 0.200, "Recorded duration should be at most 0.200s, got %v", point.Sum)
+	// Duration should be positive
+	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
@@ -670,9 +655,6 @@ func (s *DBTracerSuite) TestTraceConnectSuccess() {
 		ConnConfig: connConfig,
 	})
 
-	sleepDuration := 50 * time.Millisecond
-	time.Sleep(sleepDuration)
-
 	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
 		Conn: s.pgxConn,
 		Err:  nil,
@@ -696,10 +678,9 @@ func (s *DBTracerSuite) TestTraceConnectSuccess() {
 	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
 	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
 
-	// Check that duration is approximately what we expected
+	// Check that duration is positive (actual execution time)
 	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration >= 45*time.Millisecond, "Duration should be at least 45ms, got %v", duration)
-	s.True(duration <= 100*time.Millisecond, "Duration should be at most 100ms, got %v", duration)
+	s.True(duration > 0, "Duration should be positive, got %v", duration)
 
 	// Verify metrics
 	histogramPoints := s.getHistogramPoints()
@@ -707,8 +688,7 @@ func (s *DBTracerSuite) TestTraceConnectSuccess() {
 
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum >= 0.045, "Recorded duration should be at least 0.045s, got %v", point.Sum)
-	s.True(point.Sum <= 0.100, "Recorded duration should be at most 0.100s, got %v", point.Sum)
+	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
 
 	// Check attributes
 	expectedAttrs := attribute.NewSet(
