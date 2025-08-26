@@ -15,15 +15,16 @@ type optionCtx struct {
 	meterProvider          metric.MeterProvider
 	traceProvider          trace.TracerProvider
 	latencyHistogramConfig struct {
-		name        string
-		unit        string
-		description string
+		name             string
+		unit             string
+		description      string
+		bucketBoundaries []float64
 	}
-	logger          *slog.Logger
-	logArgs         bool
-	logArgsLenLimit int
-	includeSQLText  bool
-	includeSpanNameSuffix  bool
+	logger                *slog.Logger
+	logArgs               bool
+	logArgsLenLimit       int
+	includeSQLText        bool
+	includeSpanNameSuffix bool
 }
 
 type Option func(*optionCtx)
@@ -40,11 +41,15 @@ func WithMeterProvider(mp metric.MeterProvider) Option {
 	}
 }
 
-func WithLatencyHistogramConfig(name, unit, description string) Option {
+func WithLatencyHistogramConfig(name, unit, description string, bucketBoundaries ...float64) Option {
 	return func(oc *optionCtx) {
 		oc.latencyHistogramConfig.name = name
 		oc.latencyHistogramConfig.unit = unit
 		oc.latencyHistogramConfig.description = description
+
+		if len(bucketBoundaries) != 0 {
+			oc.latencyHistogramConfig.bucketBoundaries = bucketBoundaries
+		}
 	}
 }
 
@@ -79,7 +84,7 @@ func WithIncludeSQLText(includeSQLText bool) Option {
 }
 
 func WithIncludeSpanNameSuffix(includeSpanNameSuffix bool) Option {
-	return func (oc *optionCtx)  {
+	return func(oc *optionCtx) {
 		oc.includeSpanNameSuffix = includeSpanNameSuffix
 	}
 }

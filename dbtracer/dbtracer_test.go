@@ -196,7 +196,8 @@ func (s *DBTracerSuite) TestNewDBTracer() {
 				WithLogArgs(true),
 				WithLogArgsLenLimit(256),
 				WithIncludeSQLText(true),
-				WithLatencyHistogramConfig("custom.duration", "s", "Custom duration metric"),
+				WithLatencyHistogramConfig("custom.duration", "s", "Custom duration metric",
+					0.1, 10, 100, 1000),
 			},
 			wantErr: false,
 			validateTracer: func(s *DBTracerSuite, t Tracer) {
