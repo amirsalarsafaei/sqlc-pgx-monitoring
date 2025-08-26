@@ -1,3 +1,5 @@
+// Package dbtracer provides a tracer implementation for pgx and pgxpool that integrates with OpenTelemetry.
+// dbtracer parses sqlc generated queries to extract query name and command type for better observability.
 package dbtracer
 
 import (
@@ -72,13 +74,15 @@ func NewDBTracer(
 		logArgs:         true,
 		logArgsLenLimit: 64,
 		latencyHistogramConfig: struct {
-			name        string
-			unit        string
-			description string
+			name             string
+			unit             string
+			description      string
+			bucketBoundaries []float64
 		}{
-			description: semconv.DBClientOperationDurationDescription,
-			unit:        semconv.DBClientOperationDurationUnit,
-			name:        semconv.DBClientOperationDurationName,
+			description:      semconv.DBClientOperationDurationDescription,
+			unit:             semconv.DBClientOperationDurationUnit,
+			name:             semconv.DBClientOperationDurationName,
+			bucketBoundaries: defaultBucketBoundaries,
 		},
 		logger:         slog.Default(),
 		includeSQLText: false,
@@ -92,6 +96,7 @@ func NewDBTracer(
 		optCtx.latencyHistogramConfig.name,
 		metric.WithDescription(optCtx.latencyHistogramConfig.description),
 		metric.WithUnit(optCtx.latencyHistogramConfig.unit),
+		metric.WithExplicitBucketBoundaries(optCtx.latencyHistogramConfig.bucketBoundaries...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initializing histogram meter: %w", err)
@@ -99,8 +104,9 @@ func NewDBTracer(
 
 	connAcquireHist, err := meter.Float64Histogram(
 		"pgx.pool.trace.acquire.duration",
-		metric.WithDescription(""),
-		metric.WithUnit("{connection}"),
+		metric.WithDescription("time taken to acquire a connection from the pool"),
+		metric.WithUnit("s"),
+		metric.WithExplicitBucketBoundaries(defaultBucketBoundaries...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("initializing trace connection acquire meter: %w", err)
@@ -108,7 +114,7 @@ func NewDBTracer(
 
 	connAcquireMeter, err := meter.Int64Counter(
 		"pgx.pool.trace.acquire.count",
-		metric.WithDescription(""),
+		metric.WithDescription("counter for acquiring connections from the pool"),
 		metric.WithUnit("{connection}"),
 	)
 	if err != nil {
@@ -117,7 +123,7 @@ func NewDBTracer(
 
 	connReleaseMeter, err := meter.Int64Counter(
 		"pgx.pool.trace.release.count",
-		metric.WithDescription(""),
+		metric.WithDescription("counter for releasing connections back to the pool"),
 		metric.WithUnit("{connection}"),
 	)
 	if err != nil {
