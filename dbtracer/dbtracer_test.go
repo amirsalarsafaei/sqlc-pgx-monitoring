@@ -1039,6 +1039,17 @@ func (s *DBTracerSuite) TestPgxStatusFromErr() {
 	s.Equal("UNKNOWN_ERROR", status)
 }
 
+func (s *DBTracerSuite) TestPgxStatusFromErr_WithWrappedPgError() {
+	wrappedPgErr := fmt.Errorf("wrapped: %w", &pgconn.PgError{
+		Severity: "ERROR",
+		Code:     "23505",
+		Message:  "duplicate key value violates unique constraint",
+	})
+
+	status := pgxStatusFromErr(wrappedPgErr)
+	s.Equal("ERROR", status)
+}
+
 func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 	// Start a query to get a real span
 	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
@@ -1082,14 +1093,23 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 
 	span = trace.SpanFromContext(ctx)
 
-	testErr := errors.New("test error")
+	testErr := fmt.Errorf("wrapped pg error: %w", &pgconn.PgError{
+		Severity: "ERROR",
+		Code:     "23505",
+		Message:  "duplicate key value violates unique constraint",
+	})
 	dbTracer.recordSpanError(span, testErr)
 	span.End()
 
 	spans = s.spanRecorder.Ended()
 	s.Require().Len(spans, 1)
 	s.Equal(codes.Error, spans[0].Status().Code)
-	s.Equal("test error", spans[0].Status().Description)
+	s.Equal(testErr.Error(), spans[0].Status().Description)
+
+	attrs := s.attributesToMap(spans[0].Attributes())
+	dbStatusCode, ok := attrs[DBStatusCodeKey]
+	s.True(ok)
+	s.Equal("23505", dbStatusCode.AsString())
 
 	// Verify that the error was recorded as an event
 	events := spans[0].Events()
