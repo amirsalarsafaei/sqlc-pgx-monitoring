@@ -12,8 +12,9 @@ import (
 )
 
 type traceBatchData struct {
-	startTime       time.Time // 16 bytes
+	startTime       time.Time // 24 bytes
 	batchQuerySpans []trace.Span
+	qMD             *queryMetadata
 	batchIndex      int
 }
 
@@ -23,35 +24,54 @@ var (
 )
 
 func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, batch pgx.TraceBatchStartData) context.Context {
-	ctx, _ = dt.getTracer().Start(ctx, "postgresql.batch", trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			dt.infoAttrs...,
-		), trace.WithAttributes(pgxOperationBatch))
+	// sqlc does not allow mixing different queries in the same batch, so every
+	// queued query shares the same operation name. We derive it from the first
+	// query and use it to name the batch span, matching the per-query spans.
+	var batchQMD *queryMetadata
+	if batch.Batch != nil && len(batch.Batch.QueuedQueries) > 0 {
+		batchQMD = queryMetadataFromSQL(batch.Batch.QueuedQueries[0].SQL)
+	}
+
+	ctx, span := dt.getTracer().Start(ctx, dt.spanName("postgresql.batch", batchQMD),
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(dt.infoAttrs...),
+		trace.WithAttributes(pgxOperationBatch))
+
+	if batchQMD != nil {
+		span.SetAttributes(
+			SQLCQueryNameKey.String(batchQMD.name),
+			SQLCQueryCommandKey.String(batchQMD.command),
+			semconv.DBOperationName(batchQMD.name),
+		)
+	}
 
 	var batchQuerySpans []trace.Span
 	if batch.Batch != nil {
 		batchQuerySpans = make([]trace.Span, len(batch.Batch.QueuedQueries))
 		for i, q := range batch.Batch.QueuedQueries {
-			_, span := dt.getTracer().Start(ctx, "postgresql.batch.query", trace.WithSpanKind(trace.SpanKindClient),
-				trace.WithAttributes(dt.infoAttrs...), trace.WithAttributes(
-					pgxOperationBatchQuery))
-
 			qMD := queryMetadataFromSQL(q.SQL)
+
+			_, querySpan := dt.getTracer().Start(ctx, dt.spanName("postgresql.batch.query", qMD),
+				trace.WithSpanKind(trace.SpanKindClient),
+				trace.WithAttributes(dt.infoAttrs...),
+				trace.WithAttributes(pgxOperationBatchQuery))
+
 			if qMD != nil {
-				span.SetAttributes(
+				querySpan.SetAttributes(
 					SQLCQueryNameKey.String(qMD.name),
 					SQLCQueryCommandKey.String(qMD.command),
 					semconv.DBOperationName(qMD.name),
 				)
 			}
 
-			batchQuerySpans[i] = span
+			batchQuerySpans[i] = querySpan
 		}
 	}
 
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
 		startTime:       time.Now(),
 		batchQuerySpans: batchQuerySpans,
+		qMD:             batchQMD,
 	})
 }
 
@@ -109,7 +129,7 @@ func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.
 
 	interval := time.Since(traceData.startTime)
 
-	dt.recordDBOperationHistogramMetric(ctx, "batch", nil, interval, data.Err)
+	dt.recordDBOperationHistogramMetric(ctx, "batch", traceData.qMD, interval, data.Err)
 
 	var logAttrs []slog.Attr
 	var level slog.Level
