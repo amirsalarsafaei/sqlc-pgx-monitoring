@@ -18,7 +18,7 @@ type DBConfig struct {
 	Name string
 }
 
-func GetConnectionPool(ctx context.Context, dbConf DBConfig) (*pgxpool.Pool, error) {
+func GetConnectionPool(ctx context.Context, dbConf DBConfig, opts ...dbtracer.Option) (*pgxpool.Pool, error) {
 	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
 	)
@@ -29,6 +29,7 @@ func GetConnectionPool(ctx context.Context, dbConf DBConfig) (*pgxpool.Pool, err
 
 	tracer, err := dbtracer.NewDBTracer(
 		"postgres",
+		opts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating tracer: %w", err)
@@ -44,7 +45,7 @@ func GetConnectionPool(ctx context.Context, dbConf DBConfig) (*pgxpool.Pool, err
 	return pool, pool.Ping(ctx)
 }
 
-func GetConnection(ctx context.Context, dbConf DBConfig) (*pgx.Conn, error) {
+func GetConnection(ctx context.Context, dbConf DBConfig, opts ...dbtracer.Option) (*pgx.Conn, error) {
 	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
 		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
 	)
@@ -55,6 +56,7 @@ func GetConnection(ctx context.Context, dbConf DBConfig) (*pgx.Conn, error) {
 
 	connConfig.Tracer, err = dbtracer.NewDBTracer(
 		"postgres",
+		opts...,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("creating tracer: %w", err)
