@@ -1,15 +1,15 @@
-SQLC_VERSION := v1.20.0
+SQLC_VERSION := v1.29.0
 
-.PHONY: clean generate gen-mocks gen-sqlc check-sqlc
+.PHONY: clean generate gen-mocks gen-sqlc check-sqlc test test-integration
 
 generate: clean gen-sqlc
 	@go generate ./...
 
 gen-sqlc: check-sqlc
-	sqlc generate -f ./internal/example/db/sqlc.yaml
+	cd examples && sqlc generate
 
 check-sqlc:
-	@if ! command -v mockery &> /dev/null; then \
+	@if ! command -v sqlc &> /dev/null; then \
 		echo "sqlc could not be found"; \
 		echo "Installing sqlc $(SQLC_VERSION)"; \
 		go install github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION); \
@@ -20,6 +20,13 @@ check-sqlc:
 	else \
 		echo "Required sqlc version $(SQLC_VERSION) is already installed"; \
 	fi
+
+test:
+	@go test -v ./...
+
+test-integration:
+	@echo "Running integration tests (testcontainers starts a throwaway PostgreSQL; Docker must be running)..."
+	cd examples && go test -v -tags integration -timeout 300s ./...
 
 clean:
 	find . -type f -name "*.go"  -exec grep -qE "// Code generated .* DO NOT EDIT\." {} \; -delete

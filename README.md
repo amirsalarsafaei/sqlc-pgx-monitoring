@@ -100,6 +100,11 @@ The `NewDBTracer` function accepts various options to customize its behavior:
 
 - `WithMeterProvider(mp metric.MeterProvider)`: Sets the OpenTelemetry meter provider for metrics
 - `WithTraceProvider(tp trace.TracerProvider)`: Sets the OpenTelemetry tracer provider
+- `WithIncludeSQLText(enabled bool)`: Adds the full SQL statement to spans as the `db.query.text` attribute
+- `WithIncludeSpanNameSuffix(enabled bool)`: Appends the sqlc operation name to span names, so they read
+  `postgresql.query GetUser`, `postgresql.batch GetUser`, and `postgresql.batch.query GetUser` instead of the
+  generic `postgresql.query` / `postgresql.batch`. This makes queries and batches easy to tell apart when
+  scrolling through spans in tools like Grafana or Jaeger.
 - `WithLatencyHistogramConfig(name, unit, description string)`: Configures the latency histogram properties
   ```go
   dbtracer.NewDBTracer(

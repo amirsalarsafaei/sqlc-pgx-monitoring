@@ -1037,6 +1037,11 @@ func (s *DBTracerSuite) TestPgxStatusFromErr() {
 	// Test with pgx.ErrNoRows (should still return UNKNOWN_ERROR)
 	status = pgxStatusFromErr(pgx.ErrNoRows)
 	s.Equal("UNKNOWN_ERROR", status)
+
+	// Test with a wrapped pgconn.PgError (should return its severity)
+	pgErr := &pgconn.PgError{Severity: "FATAL", Code: "23505", Message: "duplicate key"}
+	status = pgxStatusFromErr(fmt.Errorf("scanning row: %w", pgErr))
+	s.Equal("FATAL", status)
 }
 
 func (s *DBTracerSuite) TestPgxStatusFromErr_WithWrappedPgError() {
@@ -1117,6 +1122,26 @@ func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
 	s.Equal("exception", events[0].Name)
 }
 
+func (s *DBTracerSuite) TestRecordSpanErrorSetsPgStatusCode() {
+	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
+		SQL:  s.defaultQuerySQL.statement,
+		Args: []any{1},
+	})
+	span := trace.SpanFromContext(ctx)
+
+	dbTracer := s.dbTracer.(*dbTracer)
+	pgErr := &pgconn.PgError{Severity: "ERROR", Code: "23505", Message: "duplicate key value"}
+	dbTracer.recordSpanError(span, fmt.Errorf("creating user: %w", pgErr))
+	span.End()
+
+	spans := s.spanRecorder.Ended()
+	s.Require().Len(spans, 1)
+	s.Equal(codes.Error, spans[0].Status().Code)
+
+	attrMap := s.attributesToMap(spans[0].Attributes())
+	s.Equal("23505", attrMap[DBStatusCodeKey].AsString())
+}
+
 func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
 	// Start batch
 	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{
@@ -1188,6 +1213,73 @@ func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
 	point := histogramPoints[0]
 	s.Equal(uint64(1), point.Count)
 	s.True(point.Sum > 0) // Duration should be positive
+}
+
+func (s *DBTracerSuite) TestTraceBatchStart_WithSpanNameSuffix() {
+	tracer, err := NewDBTracer(
+		s.defaultDBName,
+		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithShouldLog(s.shouldLog()),
+		WithLogger(s.logger),
+		WithIncludeSpanNameSuffix(true),
+	)
+	s.Require().NoError(err)
+
+	ctx := tracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{
+		Batch: &pgx.Batch{
+			QueuedQueries: []*pgx.QueuedQuery{
+				{SQL: s.defaultQuerySQL.statement, Arguments: []any{1}},
+				{SQL: s.defaultQuerySQL.statement, Arguments: []any{2}},
+			},
+		},
+	})
+
+	tracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
+		SQL:        s.defaultQuerySQL.statement,
+		Args:       []any{1},
+		CommandTag: pgconn.CommandTag{},
+	})
+	tracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
+		SQL:        s.defaultQuerySQL.statement,
+		Args:       []any{2},
+		CommandTag: pgconn.CommandTag{},
+	})
+
+	tracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
+
+	spans := s.spanRecorder.Ended()
+	s.Require().Len(spans, 3)
+
+	// Child query spans carry the operation name suffix.
+	expectedQuerySpanName := "postgresql.batch.query " + s.defaultQuerySQL.name
+	s.Equal(expectedQuerySpanName, spans[0].Name())
+	s.Equal(expectedQuerySpanName, spans[1].Name())
+
+	// The batch span itself carries the operation name suffix and attributes,
+	// so it is identifiable in trace UIs instead of a generic "postgresql.batch".
+	batchSpan := spans[2]
+	s.Equal("postgresql.batch "+s.defaultQuerySQL.name, batchSpan.Name())
+
+	attrMap := s.attributesToMap(batchSpan.Attributes())
+	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
+	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
+	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
+	s.Equal(s.defaultQuerySQL.name, attrMap[semconv.DBOperationNameKey].AsString())
+
+	// The batch metric is enriched with the query name, matching normal queries.
+	histogramPoints := s.getHistogramPoints()
+	s.Require().Len(histogramPoints, 1)
+
+	expectedAttrs := attribute.NewSet(
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(s.defaultDBName),
+		pgxOperationBatch,
+		PGXStatusKey.String("OK"),
+		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
+		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
+	)
+	s.EqualAttributeSet(expectedAttrs, histogramPoints[0].Attributes)
 }
 
 func (s *DBTracerSuite) TestTraceWithIncludeSQLText() {
