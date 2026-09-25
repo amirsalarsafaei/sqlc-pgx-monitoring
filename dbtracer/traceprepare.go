@@ -58,8 +58,8 @@ func (dt *dbTracer) TracePrepareEnd(
 	conn *pgx.Conn,
 	data pgx.TracePrepareEndData,
 ) {
-	traceData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
+	if !ok || traceData == nil {
 		return
 	}
 

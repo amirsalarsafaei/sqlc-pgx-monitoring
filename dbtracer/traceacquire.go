@@ -33,8 +33,8 @@ func (dt *dbTracer) TraceAcquireStart(ctx context.Context, pool *pgxpool.Pool, d
 
 // TraceAcquireEnd implements Tracer.
 func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
-	traceData := ctx.Value(dbTracerAcquireCtxKey).(*traceAcquireData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerAcquireCtxKey).(*traceAcquireData)
+	if !ok || traceData == nil {
 		return
 	}
 

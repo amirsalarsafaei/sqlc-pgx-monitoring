@@ -37,8 +37,8 @@ func (dt *dbTracer) TraceCopyFromStart(ctx context.Context, _ *pgx.Conn, data pg
 }
 
 func (dt *dbTracer) TraceCopyFromEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceCopyFromEndData) {
-	copyFromData := ctx.Value(dbTracerCopyFromCtxKey).(*traceCopyFromData)
-	if copyFromData == nil {
+	copyFromData, ok := ctx.Value(dbTracerCopyFromCtxKey).(*traceCopyFromData)
+	if !ok || copyFromData == nil {
 		return
 	}
 
