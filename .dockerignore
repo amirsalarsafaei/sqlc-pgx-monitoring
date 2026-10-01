@@ -1,0 +1,7 @@
+.git
+.github
+.idea
+.vscode
+docs
+**/*.out
+**/*.test

@@ -13,22 +13,15 @@ import (
 )
 
 const (
-	// instrumentationName is the name of the instrumentation library.
 	instrumentationName = "github.com/amirsalarsafaei/sqlc-pgx-monitoring"
-	// stateKey is an attribute key for the state of a connection (e.g., "used", "idle").
-	stateKey = attribute.Key("state")
-	// reasonKey is an attribute key for the reason a connection was closed (e.g., "lifetime", "idletime").
-	reasonKey = attribute.Key("reason")
+	stateKey            = attribute.Key("state")
+	reasonKey           = attribute.Key("reason")
 )
 
 var (
-	// stateUsed is an attribute for a connection that is currently in use.
-	stateUsed = stateKey.String("used")
-	// stateIdle is an attribute for a connection that is currently idle.
-	stateIdle = stateKey.String("idle")
-	// reasonLifetime is an attribute for a connection closed due to exceeding its maximum lifetime.
+	stateUsed      = stateKey.String("used")
+	stateIdle      = stateKey.String("idle")
 	reasonLifetime = reasonKey.String("lifetime")
-	// reasonIdleTime is an attribute for a connection closed due to exceeding its maximum idle time.
 	reasonIdleTime = reasonKey.String("idletime")
 )
 
@@ -48,7 +41,6 @@ type Stat interface {
 	TotalConns() int32
 }
 
-// It is implemented by *pgxpool.Pool.
 type Stater interface {
 	Stat() *pgxpool.Stat
 }
@@ -57,17 +49,13 @@ type stater interface {
 	Stat() Stat
 }
 
-// config holds the configuration for the metrics registration.
 type config struct {
 	meter      metric.Meter
 	attributes []attribute.KeyValue
 }
 
-// Option is a function that configures the metrics registration.
 type Option func(*config)
 
-// WithMeterProvider sets the OpenTelemetry MeterProvider to be used for metrics.
-// If not provided, the global MeterProvider will be used.
 func WithMeterProvider(provider metric.MeterProvider) Option {
 	return func(c *config) {
 		c.meter = provider.Meter(
@@ -76,10 +64,9 @@ func WithMeterProvider(provider metric.MeterProvider) Option {
 	}
 }
 
-// WithAttributes adds a set of attributes to all registered metrics.
 func WithAttributes(attrs ...attribute.KeyValue) Option {
 	return func(c *config) {
-		c.attributes = attrs
+		c.attributes = append(c.attributes, attrs...)
 	}
 }
 
@@ -178,7 +165,6 @@ func register(stater stater, opts ...Option) error {
 		return fmt.Errorf("failed to create acquire duration metric: %w", err)
 	}
 
-	// This is the newly added metric.
 	waitedForAcquireDuration, err := cfg.meter.Float64ObservableCounter(
 		"pgx.pool.acquire.wait.duration",
 		metric.WithDescription("The cumulative time successful acquires from the pool waited for a resource to be released or constructed because the pool was empty."),
@@ -193,13 +179,11 @@ func register(stater stater, opts ...Option) error {
 			stats := stater.Stat()
 			obsOpts := metric.WithAttributes(cfg.attributes...)
 
-			// Gauges
 			o.ObserveInt64(usage, int64(stats.AcquiredConns()), metric.WithAttributes(stateUsed), obsOpts)
 			o.ObserveInt64(usage, int64(stats.IdleConns()), metric.WithAttributes(stateIdle), obsOpts)
 			o.ObserveInt64(maxConns, int64(stats.MaxConns()), obsOpts)
 			o.ObserveInt64(pending, int64(stats.ConstructingConns()), obsOpts)
 
-			// Counters
 			o.ObserveInt64(acquireCount, stats.AcquireCount(), obsOpts)
 			o.ObserveInt64(canceledAcquireCount, stats.CanceledAcquireCount(), obsOpts)
 			o.ObserveInt64(waitedForAcquireCount, stats.EmptyAcquireCount(), obsOpts)
@@ -208,14 +192,11 @@ func register(stater stater, opts ...Option) error {
 			o.ObserveInt64(connsDestroyed, stats.MaxLifetimeDestroyCount(), metric.WithAttributes(reasonLifetime), obsOpts)
 			o.ObserveInt64(connsDestroyed, stats.MaxIdleDestroyCount(), metric.WithAttributes(reasonIdleTime), obsOpts)
 
-			// Duration Counters
 			o.ObserveFloat64(acquireDuration, stats.AcquireDuration().Seconds(), obsOpts)
-			// Observe the newly added metric.
 			o.ObserveFloat64(waitedForAcquireDuration, stats.EmptyAcquireWaitTime().Seconds(), obsOpts)
 
 			return nil
 		},
-		// Register all instruments with the callback.
 		usage, maxConns, pending, acquireCount, canceledAcquireCount, waitedForAcquireCount,
 		connsCreated, connsDestroyed, acquireDuration, waitedForAcquireDuration,
 	)
@@ -233,6 +214,7 @@ type staterWrapper struct {
 func (s *staterWrapper) Stat() Stat {
 	return s.s.Stat()
 }
+
 func newStaterWrapper(stater Stater) stater {
 	return &staterWrapper{
 		s: stater,

@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.opentelemetry.io/otel/attribute"
 	otelmetric "go.opentelemetry.io/otel/metric"
@@ -16,329 +14,250 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-type mockStat struct {
-	acquireCountVal            int64
-	acquireDurationVal         time.Duration
-	acquiredConnsVal           int32
-	canceledAcquireCountVal    int64
-	constructingConnsVal       int32
-	emptyAcquireCountVal       int64
-	emptyAcquireWaitTimeVal    time.Duration
-	idleConnsVal               int32
-	maxConnsVal                int32
-	maxIdleDestroyCountVal     int64
-	maxLifetimeDestroyCountVal int64
-	newConnsCountVal           int64
-	totalConnsVal              int32
-}
-
-// Implement the Stat interface
-func (m *mockStat) AcquireCount() int64                 { return m.acquireCountVal }
-func (m *mockStat) AcquireDuration() time.Duration      { return m.acquireDurationVal }
-func (m *mockStat) AcquiredConns() int32                { return m.acquiredConnsVal }
-func (m *mockStat) CanceledAcquireCount() int64         { return m.canceledAcquireCountVal }
-func (m *mockStat) ConstructingConns() int32            { return m.constructingConnsVal }
-func (m *mockStat) EmptyAcquireCount() int64            { return m.emptyAcquireCountVal }
-func (m *mockStat) EmptyAcquireWaitTime() time.Duration { return m.emptyAcquireWaitTimeVal }
-func (m *mockStat) IdleConns() int32                    { return m.idleConnsVal }
-func (m *mockStat) MaxConns() int32                     { return m.maxConnsVal }
-func (m *mockStat) MaxIdleDestroyCount() int64          { return m.maxIdleDestroyCountVal }
-func (m *mockStat) MaxLifetimeDestroyCount() int64      { return m.maxLifetimeDestroyCountVal }
-func (m *mockStat) NewConnsCount() int64                { return m.newConnsCountVal }
-func (m *mockStat) TotalConns() int32                   { return m.totalConnsVal }
-
-// mockStater implements the Stater interface for testing.
-type mockStater struct {
-	stats Stat
-}
-
-// Stat returns the mock stats, satisfying the Stater interface.
-func (m *mockStater) Stat() Stat {
-	return m.stats
-}
-
-// PoolStatusTestSuite groups all tests for the poolstatus package.
-type PoolStatusTestSuite struct {
+type PoolStatusSuite struct {
 	suite.Suite
+
+	ctx      context.Context
 	reader   *metric.ManualReader
 	provider *metric.MeterProvider
-	stater   stater
-	stats    *mockStat
-	ctx      context.Context
-}
-
-func (s *PoolStatusTestSuite) SetupTest() {
-	s.ctx = context.Background()
-	s.reader = metric.NewManualReader()
-	s.provider = metric.NewMeterProvider(metric.WithReader(s.reader))
-
-	s.stats = &mockStat{
-		acquiredConnsVal:           5,
-		idleConnsVal:               2,
-		maxConnsVal:                10,
-		constructingConnsVal:       1,
-		acquireCountVal:            100,
-		canceledAcquireCountVal:    5,
-		emptyAcquireCountVal:       20,
-		newConnsCountVal:           8,
-		maxLifetimeDestroyCountVal: 3,
-		maxIdleDestroyCountVal:     4,
-		acquireDurationVal:         1 * time.Second,
-		emptyAcquireWaitTimeVal:    500 * time.Millisecond,
-	}
-
-	s.stater = &mockStater{stats: s.stats}
+	stats    *fakeStat
 }
 
 func TestPoolStatusSuite(t *testing.T) {
-	suite.Run(t, new(PoolStatusTestSuite))
+	suite.Run(t, new(PoolStatusSuite))
 }
 
-func (s *PoolStatusTestSuite) TestRegisterMetrics_DefaultOptions() {
-	err := register(s.stater, WithMeterProvider(s.provider))
-	s.Require().NoError(err, "Register should not return an error")
-
-	rm := s.collectMetrics()
-	s.assertAllMetrics(rm.ScopeMetrics[0], s.stats, nil)
-}
-
-func (s *PoolStatusTestSuite) TestRegisterMetrics_WithAttributes() {
-	commonAttrs := []attribute.KeyValue{
-		attribute.String("db.instance", "test-db"),
-		attribute.String("service.name", "my-app"),
+func (s *PoolStatusSuite) SetupTest() {
+	s.ctx = context.Background()
+	s.reader = metric.NewManualReader()
+	s.provider = metric.NewMeterProvider(metric.WithReader(s.reader))
+	s.stats = &fakeStat{
+		acquiredConns:           5,
+		idleConns:               2,
+		maxConns:                10,
+		constructingConns:       1,
+		acquireCount:            100,
+		canceledAcquireCount:    5,
+		emptyAcquireCount:       20,
+		newConnsCount:           8,
+		maxLifetimeDestroyCount: 3,
+		maxIdleDestroyCount:     4,
+		acquireDuration:         1500 * time.Millisecond,
+		emptyAcquireWaitTime:    500 * time.Millisecond,
 	}
+}
 
-	err := register(s.stater,
+func (s *PoolStatusSuite) TestObservesPoolStats() {
+	s.Require().NoError(register(s.stats, WithMeterProvider(s.provider)))
+
+	rm := s.collect()
+
+	s.Equal(map[string]float64{
+		"db.client.connections.usage{state=used}":         5,
+		"db.client.connections.usage{state=idle}":         2,
+		"db.client.connection.max":                        10,
+		"db.client.connections.pending_requests":          1,
+		"pgx.pool.acquires":                               100,
+		"pgx.pool.canceled_acquires":                      5,
+		"pgx.pool.waited_for_acquires":                    20,
+		"pgx.pool.connections.created":                    8,
+		"pgx.pool.connections.destroyed{reason=lifetime}": 3,
+		"pgx.pool.connections.destroyed{reason=idletime}": 4,
+		"pgx.pool.acquire.duration":                       1.5,
+		"pgx.pool.acquire.wait.duration":                  0.5,
+	}, observations(rm))
+
+	s.Equal(map[string]string{
+		"db.client.connections.usage":            "{connection}",
+		"db.client.connection.max":               "{connection}",
+		"db.client.connections.pending_requests": "{request}",
+		"pgx.pool.acquires":                      "{request}",
+		"pgx.pool.canceled_acquires":             "{request}",
+		"pgx.pool.waited_for_acquires":           "{request}",
+		"pgx.pool.connections.created":           "{connection}",
+		"pgx.pool.connections.destroyed":         "{connection}",
+		"pgx.pool.acquire.duration":              "s",
+		"pgx.pool.acquire.wait.duration":         "s",
+	}, units(rm))
+
+	s.Equal(map[string]string{
+		"db.client.connections.usage":            semconv.DBClientConnectionsUsageDescription,
+		"db.client.connection.max":               semconv.DBClientConnectionMaxDescription,
+		"db.client.connections.pending_requests": semconv.DBClientConnectionsPendingRequestsDescription,
+		"pgx.pool.acquires":                      "Cumulative count of successful acquires from the pool.",
+		"pgx.pool.canceled_acquires":             "Cumulative count of acquires from the pool that were canceled by a context.",
+		"pgx.pool.waited_for_acquires":           "Cumulative count of acquires that waited for a resource to be released or constructed because the pool was empty.",
+		"pgx.pool.connections.created":           "Cumulative count of new connections opened.",
+		"pgx.pool.connections.destroyed":         "Cumulative count of connections destroyed, with a reason attribute.",
+		"pgx.pool.acquire.duration":              "Total duration of all successful acquires from the pool.",
+		"pgx.pool.acquire.wait.duration":         "The cumulative time successful acquires from the pool waited for a resource to be released or constructed because the pool was empty.",
+	}, descriptions(rm))
+
+	kinds := map[string]string{}
+	for _, m := range rm.ScopeMetrics[0].Metrics {
+		switch data := m.Data.(type) {
+		case metricdata.Gauge[int64]:
+			kinds[m.Name] = "int64 gauge"
+		case metricdata.Sum[int64]:
+			s.True(data.IsMonotonic, m.Name)
+			kinds[m.Name] = "int64 counter"
+		case metricdata.Sum[float64]:
+			s.True(data.IsMonotonic, m.Name)
+			kinds[m.Name] = "float64 counter"
+		}
+	}
+	s.Equal(map[string]string{
+		"db.client.connections.usage":            "int64 gauge",
+		"db.client.connection.max":               "int64 gauge",
+		"db.client.connections.pending_requests": "int64 gauge",
+		"pgx.pool.acquires":                      "int64 counter",
+		"pgx.pool.canceled_acquires":             "int64 counter",
+		"pgx.pool.waited_for_acquires":           "int64 counter",
+		"pgx.pool.connections.created":           "int64 counter",
+		"pgx.pool.connections.destroyed":         "int64 counter",
+		"pgx.pool.acquire.duration":              "float64 counter",
+		"pgx.pool.acquire.wait.duration":         "float64 counter",
+	}, kinds)
+}
+
+func (s *PoolStatusSuite) TestReadsStatsOnEveryCollection() {
+	s.Require().NoError(register(s.stats, WithMeterProvider(s.provider)))
+	s.collect()
+
+	s.stats.acquiredConns = 9
+	s.stats.acquireCount = 250
+
+	obs := observations(s.collect())
+	s.Equal(float64(9), obs["db.client.connections.usage{state=used}"])
+	s.Equal(float64(250), obs["pgx.pool.acquires"])
+}
+
+func (s *PoolStatusSuite) TestWithAttributesAccumulate() {
+	s.Require().NoError(register(s.stats,
 		WithMeterProvider(s.provider),
-		WithAttributes(commonAttrs...),
-	)
-	s.Require().NoError(err, "Register should not return an error")
+		WithAttributes(attribute.String("pool", "primary")),
+		WithAttributes(attribute.String("service.name", "users")),
+	))
 
-	rm := s.collectMetrics()
-	s.assertAllMetrics(rm.ScopeMetrics[0], s.stats, commonAttrs)
+	obs := observations(s.collect())
+
+	s.Len(obs, 12)
+	for name := range obs {
+		s.Contains(name, "pool=primary", name)
+		s.Contains(name, "service.name=users", name)
+	}
+	s.Contains(obs, "db.client.connections.usage{pool=primary,service.name=users,state=used}")
+	s.Contains(obs, "pgx.pool.acquires{pool=primary,service.name=users}")
 }
 
-func (s *PoolStatusTestSuite) TestRegisterMetrics_ErrorOnRegistration() {
-	mockProvider := &erroringMeterProvider{err: errors.New("registration failed")}
+func (s *PoolStatusSuite) TestRegisterFailsWhenInstrumentCreationFails() {
+	err := register(s.stats, WithMeterProvider(&erroringMeterProvider{err: errors.New("meter closed")}))
 
-	err := register(s.stater, WithMeterProvider(mockProvider))
-
-	s.Require().Error(err)
-	s.Assert().ErrorContains(err, "failed to create usage metric")
-	s.Assert().ErrorContains(err, "registration failed")
+	s.ErrorContains(err, "failed to create usage metric: meter closed")
 }
 
-func (s *PoolStatusTestSuite) collectMetrics() metricdata.ResourceMetrics {
+func (s *PoolStatusSuite) collect() metricdata.ResourceMetrics {
 	s.T().Helper()
+
 	var rm metricdata.ResourceMetrics
-	err := s.reader.Collect(s.ctx, &rm)
-	s.Require().NoError(err, "Collect should not return an error")
-	s.Require().Len(rm.ScopeMetrics, 1, "should have one scope metric")
+	s.Require().NoError(s.reader.Collect(s.ctx, &rm))
+	s.Require().Len(rm.ScopeMetrics, 1)
+	s.Equal(instrumentationName, rm.ScopeMetrics[0].Scope.Name)
+
 	return rm
 }
 
-func (s *PoolStatusTestSuite) assertAllMetrics(scopeMetrics metricdata.ScopeMetrics, stats Stat, commonAttrs []attribute.KeyValue) {
-	s.T().Helper()
-	assert.Equal(s.T(), "github.com/amirsalarsafaei/sqlc-pgx-monitoring", scopeMetrics.Scope.Name)
-	require.NotEmpty(s.T(), scopeMetrics.Metrics, "should have registered metrics")
-
-	metrics := scopeMetrics.Metrics
-
-	s.assertUsageMetric(metrics, stats, commonAttrs)
-	s.assertMaxConnsMetric(metrics, stats, commonAttrs)
-	s.assertPendingMetric(metrics, stats, commonAttrs)
-	s.assertAcquireCountMetric(metrics, stats, commonAttrs)
-	s.assertCanceledAcquireCountMetric(metrics, stats, commonAttrs)
-	s.assertWaitedForAcquireCountMetric(metrics, stats, commonAttrs)
-	s.assertConnsCreatedMetric(metrics, stats, commonAttrs)
-	s.assertConnsDestroyedMetric(metrics, stats, commonAttrs)
-	s.assertAcquireDurationMetric(metrics, stats, commonAttrs)
-	s.assertWaitedForAcquireDurationMetric(metrics, stats, commonAttrs)
-}
-
-func (s *PoolStatusTestSuite) findMetric(name string, metrics []metricdata.Metrics) metricdata.Metrics {
-	s.T().Helper()
-	for _, m := range metrics {
-		if m.Name == name {
-			return m
+func observations(rm metricdata.ResourceMetrics) map[string]float64 {
+	obs := map[string]float64{}
+	add := func(name string, attrs attribute.Set, value float64) {
+		if enc := attrs.Encoded(attribute.DefaultEncoder()); enc != "" {
+			name += "{" + enc + "}"
 		}
+		obs[name] = value
 	}
-	s.Require().Fail("metric not found", "metric with name '%s' was not found", name)
-	return metricdata.Metrics{} // Unreachable
-}
 
-func (s *PoolStatusTestSuite) assertCommonAttributes(pointAttrs attribute.Set, commonAttrs []attribute.KeyValue) {
-	s.T().Helper()
-	if commonAttrs == nil {
-		return // Nothing to check
-	}
-	for _, attr := range commonAttrs {
-		val, ok := pointAttrs.Value(attr.Key)
-		s.Require().True(ok, "common attribute '%s' not found", attr.Key)
-		s.Assert().Equal(attr.Value, val, "common attribute value for '%s' does not match", attr.Key)
-	}
-}
-
-func (s *PoolStatusTestSuite) assertUsageMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric(semconv.DBClientConnectionsUsageName, metrics)
-	s.Assert().Equal(semconv.DBClientConnectionsUsageDescription, m.Description)
-	s.Assert().Equal(semconv.DBClientConnectionsUsageUnit, m.Unit)
-
-	gauge, ok := m.Data.(metricdata.Gauge[int64])
-	s.Require().True(ok, "metric '%s' should be a Gauge[int64]", m.Name)
-	s.Require().Len(gauge.DataPoints, 2, "usage metric should have 2 data points (used, idle)")
-
-	var idlePoint, usedPoint metricdata.DataPoint[int64]
-	for _, p := range gauge.DataPoints {
-		if state, ok := p.Attributes.Value("state"); ok {
-			if state.AsString() == "idle" {
-				idlePoint = p
-			} else if state.AsString() == "used" {
-				usedPoint = p
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			switch data := m.Data.(type) {
+			case metricdata.Gauge[int64]:
+				for _, p := range data.DataPoints {
+					add(m.Name, p.Attributes, float64(p.Value))
+				}
+			case metricdata.Sum[int64]:
+				for _, p := range data.DataPoints {
+					add(m.Name, p.Attributes, float64(p.Value))
+				}
+			case metricdata.Sum[float64]:
+				for _, p := range data.DataPoints {
+					add(m.Name, p.Attributes, p.Value)
+				}
 			}
 		}
 	}
-	s.Require().NotNil(idlePoint.Attributes, "idle data point not found")
-	s.Assert().Equal(int64(stats.IdleConns()), idlePoint.Value)
-	s.assertCommonAttributes(idlePoint.Attributes, attrs)
 
-	s.Require().NotNil(usedPoint.Attributes, "used data point not found")
-	s.Assert().Equal(int64(stats.AcquiredConns()), usedPoint.Value)
-	s.assertCommonAttributes(usedPoint.Attributes, attrs)
+	return obs
 }
 
-func (s *PoolStatusTestSuite) assertMaxConnsMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric(semconv.DBClientConnectionMaxName, metrics)
-	s.Assert().Equal(semconv.DBClientConnectionMaxDescription, m.Description)
-	gauge := s.getGaugeDataPoints(m)
-	s.Assert().Equal(int64(stats.MaxConns()), gauge[0].Value)
-	s.assertCommonAttributes(gauge[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertPendingMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric(semconv.DBClientConnectionsPendingRequestsName, metrics)
-	s.Assert().Equal(semconv.DBClientConnectionsPendingRequestsDescription, m.Description)
-	gauge := s.getGaugeDataPoints(m)
-	s.Assert().Equal(int64(stats.ConstructingConns()), gauge[0].Value)
-	s.assertCommonAttributes(gauge[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.acquires", metrics)
-	s.Assert().Equal("Cumulative count of successful acquires from the pool.", m.Description)
-	sum := s.getIntSumDataPoints(m)
-	s.Assert().Equal(stats.AcquireCount(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertCanceledAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.canceled_acquires", metrics)
-	s.Assert().Equal("Cumulative count of acquires from the pool that were canceled by a context.", m.Description)
-	sum := s.getIntSumDataPoints(m)
-	s.Assert().Equal(stats.CanceledAcquireCount(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertWaitedForAcquireCountMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.waited_for_acquires", metrics)
-	s.Assert().Equal("Cumulative count of acquires that waited for a resource to be released or constructed because the pool was empty.", m.Description)
-	sum := s.getIntSumDataPoints(m)
-	s.Assert().Equal(stats.EmptyAcquireCount(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertConnsCreatedMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.connections.created", metrics)
-	s.Assert().Equal("Cumulative count of new connections opened.", m.Description)
-	sum := s.getIntSumDataPoints(m)
-	s.Assert().Equal(stats.NewConnsCount(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertAcquireDurationMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.acquire.duration", metrics)
-	s.Assert().Equal("Total duration of all successful acquires from the pool.", m.Description)
-	sum := s.getFloatSumDataPoints(m)
-	s.Assert().Equal(stats.AcquireDuration().Seconds(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertWaitedForAcquireDurationMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.acquire.wait.duration", metrics)
-	s.Assert().Equal("The cumulative time successful acquires from the pool waited for a resource to be released or constructed because the pool was empty.", m.Description)
-	sum := s.getFloatSumDataPoints(m)
-	s.Assert().Equal(stats.EmptyAcquireWaitTime().Seconds(), sum[0].Value)
-	s.assertCommonAttributes(sum[0].Attributes, attrs)
-}
-
-func (s *PoolStatusTestSuite) assertConnsDestroyedMetric(metrics []metricdata.Metrics, stats Stat, attrs []attribute.KeyValue) {
-	s.T().Helper()
-	m := s.findMetric("pgx.pool.connections.destroyed", metrics)
-	s.Assert().Equal("Cumulative count of connections destroyed, with a reason attribute.", m.Description)
-	s.Assert().Equal("{connection}", m.Unit)
-
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	s.Require().True(ok, "metric '%s' should be a Sum[int64]", m.Name)
-	s.Require().Len(sum.DataPoints, 2, "destroyed metric should have 2 data points (lifetime, idletime)")
-
-	var lifetimePoint, idlePoint metricdata.DataPoint[int64]
-	for _, p := range sum.DataPoints {
-		if reason, ok := p.Attributes.Value("reason"); ok {
-			if reason.AsString() == "lifetime" {
-				lifetimePoint = p
-			} else if reason.AsString() == "idletime" {
-				idlePoint = p
-			}
+func units(rm metricdata.ResourceMetrics) map[string]string {
+	u := map[string]string{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			u[m.Name] = m.Unit
 		}
 	}
-	s.Require().NotNil(lifetimePoint.Attributes, "lifetime point not found")
-	s.Assert().Equal(stats.MaxLifetimeDestroyCount(), lifetimePoint.Value)
-	s.assertCommonAttributes(lifetimePoint.Attributes, attrs)
 
-	s.Require().NotNil(idlePoint.Attributes, "idletime point not found")
-	s.Assert().Equal(stats.MaxIdleDestroyCount(), idlePoint.Value)
-	s.assertCommonAttributes(idlePoint.Attributes, attrs)
+	return u
 }
 
-func (s *PoolStatusTestSuite) getGaugeDataPoints(m metricdata.Metrics) []metricdata.DataPoint[int64] {
-	s.T().Helper()
-	gauge, ok := m.Data.(metricdata.Gauge[int64])
-	s.Require().True(ok, "metric '%s' should be a Gauge[int64]", m.Name)
-	s.Require().Len(gauge.DataPoints, 1)
-	return gauge.DataPoints
+func descriptions(rm metricdata.ResourceMetrics) map[string]string {
+	d := map[string]string{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			d[m.Name] = m.Description
+		}
+	}
+
+	return d
 }
 
-func (s *PoolStatusTestSuite) getIntSumDataPoints(m metricdata.Metrics) []metricdata.DataPoint[int64] {
-	s.T().Helper()
-	sum, ok := m.Data.(metricdata.Sum[int64])
-	s.Require().True(ok, "metric '%s' should be a Sum[int64]", m.Name)
-	s.Require().Len(sum.DataPoints, 1)
-	return sum.DataPoints
+type fakeStat struct {
+	acquireCount            int64
+	acquireDuration         time.Duration
+	acquiredConns           int32
+	canceledAcquireCount    int64
+	constructingConns       int32
+	emptyAcquireCount       int64
+	emptyAcquireWaitTime    time.Duration
+	idleConns               int32
+	maxConns                int32
+	maxIdleDestroyCount     int64
+	maxLifetimeDestroyCount int64
+	newConnsCount           int64
+	totalConns              int32
 }
 
-func (s *PoolStatusTestSuite) getFloatSumDataPoints(m metricdata.Metrics) []metricdata.DataPoint[float64] {
-	s.T().Helper()
-	sum, ok := m.Data.(metricdata.Sum[float64])
-	s.Require().True(ok, "metric '%s' should be a Sum[float64]", m.Name)
-	s.Require().Len(sum.DataPoints, 1)
-	return sum.DataPoints
-}
+func (f *fakeStat) Stat() Stat { return f }
+
+func (f *fakeStat) AcquireCount() int64                 { return f.acquireCount }
+func (f *fakeStat) AcquireDuration() time.Duration      { return f.acquireDuration }
+func (f *fakeStat) AcquiredConns() int32                { return f.acquiredConns }
+func (f *fakeStat) CanceledAcquireCount() int64         { return f.canceledAcquireCount }
+func (f *fakeStat) ConstructingConns() int32            { return f.constructingConns }
+func (f *fakeStat) EmptyAcquireCount() int64            { return f.emptyAcquireCount }
+func (f *fakeStat) EmptyAcquireWaitTime() time.Duration { return f.emptyAcquireWaitTime }
+func (f *fakeStat) IdleConns() int32                    { return f.idleConns }
+func (f *fakeStat) MaxConns() int32                     { return f.maxConns }
+func (f *fakeStat) MaxIdleDestroyCount() int64          { return f.maxIdleDestroyCount }
+func (f *fakeStat) MaxLifetimeDestroyCount() int64      { return f.maxLifetimeDestroyCount }
+func (f *fakeStat) NewConnsCount() int64                { return f.newConnsCount }
+func (f *fakeStat) TotalConns() int32                   { return f.totalConns }
 
 type erroringMeterProvider struct {
 	otelmetric.MeterProvider
 	err error
 }
 
-func (p *erroringMeterProvider) Meter(name string, opts ...otelmetric.MeterOption) otelmetric.Meter {
+func (p *erroringMeterProvider) Meter(string, ...otelmetric.MeterOption) otelmetric.Meter {
 	return &erroringMeter{err: p.err}
 }
 
@@ -347,6 +266,6 @@ type erroringMeter struct {
 	err error
 }
 
-func (m *erroringMeter) Int64ObservableGauge(name string, options ...otelmetric.Int64ObservableGaugeOption) (otelmetric.Int64ObservableGauge, error) {
+func (m *erroringMeter) Int64ObservableGauge(string, ...otelmetric.Int64ObservableGaugeOption) (otelmetric.Int64ObservableGauge, error) {
 	return nil, m.err
 }

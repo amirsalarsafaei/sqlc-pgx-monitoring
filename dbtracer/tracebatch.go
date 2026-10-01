@@ -2,20 +2,23 @@ package dbtracer
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"go.opentelemetry.io/otel/codes"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
+var errBatchQueryNotExecuted = errors.New("batch query not executed")
+
 type traceBatchData struct {
-	startTime       time.Time // 24 bytes
-	batchQuerySpans []trace.Span
-	qMD             *queryMetadata
-	batchIndex      int
+	span       trace.Span
+	startTime  time.Time
+	querySpans []trace.Span
+	qMD        *queryMetadata
+	queryIndex int
+	ended      bool
 }
 
 var (
@@ -23,55 +26,33 @@ var (
 	pgxOperationBatchQuery = PGXOperationTypeKey.String("batch.query")
 )
 
-func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, batch pgx.TraceBatchStartData) context.Context {
-	// sqlc does not allow mixing different queries in the same batch, so every
-	// queued query shares the same operation name. We derive it from the first
-	// query and use it to name the batch span, matching the per-query spans.
+func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceBatchStartData) context.Context {
+	var queued []*pgx.QueuedQuery
+	if data.Batch != nil {
+		queued = data.Batch.QueuedQueries
+	}
+
+	// sqlc queues a single query per batch, so the first query names the batch.
 	var batchQMD *queryMetadata
-	if batch.Batch != nil && len(batch.Batch.QueuedQueries) > 0 {
-		batchQMD = queryMetadataFromSQL(batch.Batch.QueuedQueries[0].SQL)
+	if len(queued) > 0 {
+		batchQMD = queryMetadataFromSQL(queued[0].SQL)
 	}
 
-	ctx, span := dt.getTracer().Start(ctx, dt.spanName("postgresql.batch", batchQMD),
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(dt.infoAttrs...),
-		trace.WithAttributes(pgxOperationBatch))
+	ctx, span := dt.startSpan(ctx, dt.spanName("postgresql.batch", batchQMD),
+		append(sqlcAttributes(batchQMD), pgxOperationBatch)...)
 
-	if batchQMD != nil {
-		span.SetAttributes(
-			SQLCQueryNameKey.String(batchQMD.name),
-			SQLCQueryCommandKey.String(batchQMD.command),
-			semconv.DBOperationName(batchQMD.name),
-		)
-	}
-
-	var batchQuerySpans []trace.Span
-	if batch.Batch != nil {
-		batchQuerySpans = make([]trace.Span, len(batch.Batch.QueuedQueries))
-		for i, q := range batch.Batch.QueuedQueries {
-			qMD := queryMetadataFromSQL(q.SQL)
-
-			_, querySpan := dt.getTracer().Start(ctx, dt.spanName("postgresql.batch.query", qMD),
-				trace.WithSpanKind(trace.SpanKindClient),
-				trace.WithAttributes(dt.infoAttrs...),
-				trace.WithAttributes(pgxOperationBatchQuery))
-
-			if qMD != nil {
-				querySpan.SetAttributes(
-					SQLCQueryNameKey.String(qMD.name),
-					SQLCQueryCommandKey.String(qMD.command),
-					semconv.DBOperationName(qMD.name),
-				)
-			}
-
-			batchQuerySpans[i] = querySpan
-		}
+	querySpans := make([]trace.Span, len(queued))
+	for i, q := range queued {
+		qMD := queryMetadataFromSQL(q.SQL)
+		_, querySpans[i] = dt.startSpan(ctx, dt.spanName("postgresql.batch.query", qMD),
+			append(dt.queryAttributes(qMD, q.SQL), pgxOperationBatchQuery)...)
 	}
 
 	return context.WithValue(ctx, dbTracerBatchCtxKey, &traceBatchData{
-		startTime:       time.Now(),
-		batchQuerySpans: batchQuerySpans,
-		qMD:             batchQMD,
+		span:       span,
+		startTime:  time.Now(),
+		querySpans: querySpans,
+		qMD:        batchQMD,
 	})
 }
 
@@ -81,76 +62,61 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 		return
 	}
 
-	if traceData.batchIndex >= len(traceData.batchQuerySpans) {
+	if traceData.queryIndex >= len(traceData.querySpans) {
 		return
 	}
 
-	span := traceData.batchQuerySpans[traceData.batchIndex]
-	defer span.End()
-	traceData.batchIndex++
+	endSpan(traceData.querySpans[traceData.queryIndex], data.Err)
+	traceData.queryIndex++
+
+	if !dt.shouldLog(data.Err) {
+		return
+	}
 
 	var logAttrs []slog.Attr
-	var level slog.Level
-	if data.Err != nil {
-		span.SetStatus(codes.Error, data.Err.Error())
-		span.RecordError(data.Err)
-		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
-		level = slog.LevelError
-	} else {
-		span.SetStatus(codes.Ok, "")
+	if data.Err == nil {
 		logAttrs = append(logAttrs, slog.String("commandTag", data.CommandTag.String()))
-		level = slog.LevelInfo
 	}
+	logAttrs = append(logAttrs,
+		slog.String("sql", data.SQL),
+		slog.Any("args", dt.logQueryArgs(data.Args)),
+		slog.Uint64("pid", uint64(extractConnectionID(conn))),
+	)
 
-	if dt.shouldLog(data.Err) {
-		logAttrs = append(logAttrs, slog.String("sql", data.SQL),
-			slog.Any("args", dt.logQueryArgs(data.Args)),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-		)
-
-		dt.logger.LogAttrs(ctx, level,
-			"batch query",
-			logAttrs...,
-		)
-	}
+	dt.log(ctx, "batch query", data.Err, logAttrs...)
 }
 
 func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchEndData) {
 	traceData, ok := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
-	if !ok || traceData == nil {
+	// pgx calls TraceBatchEnd twice when SendBatch fails early.
+	if !ok || traceData == nil || traceData.ended {
 		return
 	}
-
-	span := trace.SpanFromContext(ctx)
-	if !span.SpanContext().IsValid() {
-		return
-	}
-	defer span.End()
+	traceData.ended = true
 
 	interval := time.Since(traceData.startTime)
-
 	dt.recordDBOperationHistogramMetric(ctx, "batch", traceData.qMD, interval, data.Err)
 
-	var logAttrs []slog.Attr
-	var level slog.Level
-
-	if data.Err != nil {
-		dt.recordSpanError(span, data.Err)
-		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
-		level = slog.LevelError
-	} else {
-		span.SetStatus(codes.Ok, "")
-		level = slog.LevelInfo
+	// pgx stops reporting queued queries after the first failure.
+	if pending := traceData.querySpans[traceData.queryIndex:]; len(pending) > 0 {
+		pendingErr := data.Err
+		if pendingErr == nil {
+			pendingErr = errBatchQueryNotExecuted
+		}
+		for _, span := range pending {
+			endSpan(span, pendingErr)
+		}
+		traceData.queryIndex = len(traceData.querySpans)
 	}
 
-	if dt.shouldLog(data.Err) {
-		logAttrs = append(logAttrs, slog.Duration("interval", interval),
-			slog.Uint64("pid", uint64(extractConnectionID(conn))),
-		)
+	endSpan(traceData.span, data.Err)
 
-		dt.logger.LogAttrs(ctx, level,
-			"batch end",
-			logAttrs...,
-		)
+	if !dt.shouldLog(data.Err) {
+		return
 	}
+
+	dt.log(ctx, "batch end", data.Err,
+		slog.Duration("interval", interval),
+		slog.Uint64("pid", uint64(extractConnectionID(conn))),
+	)
 }

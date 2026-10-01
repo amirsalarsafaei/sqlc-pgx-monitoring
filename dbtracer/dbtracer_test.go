@@ -4,1518 +4,1012 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"reflect"
+	"sort"
 	"sync"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/pmezard/go-difflib/difflib"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	tracetest "go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
-type queryTestData struct {
-	statement string
-	command   string // derived from statement
-	name      string // derived from statement
-}
+const (
+	testDBName    = "test_db"
+	getUserSQL    = "-- name: GetUser :one\nSELECT id, name FROM users WHERE id = $1"
+	insertUserSQL = "-- name: InsertUser :batchexec\nINSERT INTO users (name) VALUES ($1)"
+	rawSQL        = "SELECT 1"
+)
+
+var (
+	dbAttrs = []attribute.KeyValue{
+		semconv.DBSystemPostgreSQL,
+		semconv.DBNamespace(testDBName),
+	}
+	getUserAttrs = []attribute.KeyValue{
+		SQLCQueryNameKey.String("GetUser"),
+		SQLCQueryCommandKey.String("one"),
+	}
+	insertUserAttrs = []attribute.KeyValue{
+		SQLCQueryNameKey.String("InsertUser"),
+		SQLCQueryCommandKey.String("batchexec"),
+	}
+	errUniqueViolation = fmt.Errorf("insert user: %w", &pgconn.PgError{
+		Severity: "ERROR",
+		Code:     "23505",
+		Message:  "duplicate key value violates unique constraint",
+	})
+	errAdminShutdown = &pgconn.PgError{
+		Severity: "FATAL",
+		Code:     "57P01",
+		Message:  "terminating connection due to administrator command",
+	}
+	errConnClosed = errors.New("conn closed")
+)
 
 type DBTracerSuite struct {
 	suite.Suite
-	tracerProvider  trace.TracerProvider
-	spanRecorder    *tracetest.SpanRecorder
-	meter           metric.Meter
-	meterProvider   metric.MeterProvider
-	metricReader    *sdkmetric.ManualReader
-	histogram       metric.Float64Histogram
-	shouldLog       func() ShouldLog
-	logger          *slog.Logger
-	ctx             context.Context
-	pgxConn         *pgx.Conn
-	pgxPool         *pgxpool.Pool
-	dbTracer        Tracer
-	defaultDBName   string
-	defaultQuerySQL queryTestData
-}
 
-// getMetrics retrieves metrics from the manual reader for inspection
-func (s *DBTracerSuite) getMetrics() []metricdata.Metrics {
-	var rm metricdata.ResourceMetrics
-	err := s.metricReader.Collect(context.Background(), &rm)
-	s.Require().NoError(err)
-
-	var metrics []metricdata.Metrics
-	for _, sm := range rm.ScopeMetrics {
-		metrics = append(metrics, sm.Metrics...)
-	}
-	return metrics
-}
-
-// getHistogramPoints retrieves histogram data points from metrics
-func (s *DBTracerSuite) getHistogramPoints() []metricdata.HistogramDataPoint[float64] {
-	metrics := s.getMetrics()
-	for _, m := range metrics {
-		if h, ok := m.Data.(metricdata.Histogram[float64]); ok {
-			return h.DataPoints
-		}
-	}
-	return nil
+	ctx            context.Context
+	spans          *tracetest.SpanRecorder
+	tracerProvider trace.TracerProvider
+	meterProvider  *sdkmetric.MeterProvider
+	metrics        *sdkmetric.ManualReader
+	logs           *logRecorder
+	tracer         Tracer
 }
 
 func TestDBTracerSuite(t *testing.T) {
 	suite.Run(t, new(DBTracerSuite))
 }
 
-// resetRecorders clears the span recorder and metric reader for a clean test state
-func (s *DBTracerSuite) resetRecorders() {
-	s.spanRecorder.Reset()
-
-	// Collect metrics to clear them
-	var rm metricdata.ResourceMetrics
-	_ = s.metricReader.Collect(context.Background(), &rm)
+func (s *DBTracerSuite) SetupTest() {
+	s.ctx = context.Background()
+	s.spans = tracetest.NewSpanRecorder()
+	s.tracerProvider = sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(s.spans))
+	s.metrics = sdkmetric.NewManualReader()
+	s.meterProvider = sdkmetric.NewMeterProvider(sdkmetric.WithReader(s.metrics))
+	s.logs = &logRecorder{}
+	s.tracer = s.newTracer()
 }
 
-func (s *DBTracerSuite) SetupTest() {
+func (s *DBTracerSuite) newTracer(opts ...Option) Tracer {
 	s.T().Helper()
 
-	s.ctx = context.Background()
-	s.defaultDBName = "test_db"
-	s.defaultQuerySQL = queryTestData{
-		name: "get_users",
-		statement: `-- name: get_users :one
-	SELECT * FROM users WHERE id = $1`,
-		command: "one",
-	}
-
-	s.spanRecorder = tracetest.NewSpanRecorder()
-	s.tracerProvider = sdktrace.NewTracerProvider(
-		sdktrace.WithSpanProcessor(s.spanRecorder),
-	)
-
-	// Initialize metric provider with manual reader for testing
-	s.metricReader = sdkmetric.NewManualReader()
-	s.meterProvider = sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(s.metricReader),
-	)
-	s.meter = s.meterProvider.Meter("github.com/amirsalarsafaei/sqlc-pgx-monitoring")
-
-	s.pgxConn = &pgx.Conn{}
-	s.pgxPool = &pgxpool.Pool{}
-
-	var err error
-	s.histogram, err = s.meter.Float64Histogram(
-		semconv.DBClientOperationDurationName,
-		metric.WithDescription(semconv.DBClientOperationDurationDescription),
-		metric.WithUnit(semconv.DBClientOperationDurationUnit),
-	)
-	s.Require().NoError(err)
-
-	s.logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	s.shouldLog = func() ShouldLog {
-		return func(err error) bool {
-			return true
-		}
-	}
-
-	s.dbTracer, err = NewDBTracer(
-		s.defaultDBName,
+	tracer, err := NewDBTracer(testDBName, append([]Option{
 		WithTraceProvider(s.tracerProvider),
 		WithMeterProvider(s.meterProvider),
-		WithLogger(s.logger),
-		WithShouldLog(s.shouldLog()),
-	)
+		WithLogger(slog.New(s.logs)),
+	}, opts...)...)
 	s.Require().NoError(err)
 
-	// Start with clean recorders
-	s.resetRecorders()
+	return tracer
 }
 
-func (s *DBTracerSuite) TestNewDBTracer() {
+func (s *DBTracerSuite) TestNewDBTracerRejectsEmptyDatabaseName() {
+	tracer, err := NewDBTracer("")
+
+	s.ErrorIs(err, ErrDatabaseNameEmpty)
+	s.Nil(tracer)
+}
+
+func (s *DBTracerSuite) TestQuery() {
 	tests := []struct {
-		name           string
-		databaseName   string
-		opts           []Option
-		validateTracer func(*DBTracerSuite, Tracer)
-		wantErr        bool
+		name        string
+		sql         string
+		err         error
+		spanAttrs   []attribute.KeyValue
+		metricAttrs []attribute.KeyValue
+		status      codes.Code
 	}{
 		{
-			name:         "successful creation with default options",
-			databaseName: "test_db",
-			opts:         []Option{},
-			wantErr:      false,
-			validateTracer: func(s *DBTracerSuite, t Tracer) {
-				dbTracer, ok := t.(*dbTracer)
-				s.Require().True(ok)
-				s.Equal(
-					slog.Default(),
-					dbTracer.logger,
-					"Should use default logger when none specified",
-				)
-			},
+			name:        "sqlc query succeeds",
+			sql:         getUserSQL,
+			spanAttrs:   []attribute.KeyValue{pgxOperationQuery, semconv.DBOperationName("GetUser")},
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("OK")},
+			status:      codes.Ok,
 		},
 		{
-			name:         "successful creation with custom logger",
-			databaseName: "test_db",
-			opts: []Option{
-				WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
+			name: "postgres error",
+			sql:  getUserSQL,
+			err:  errUniqueViolation,
+			spanAttrs: []attribute.KeyValue{
+				pgxOperationQuery, semconv.DBOperationName("GetUser"), DBStatusCodeKey.String("23505"),
 			},
-			validateTracer: func(s *DBTracerSuite, t Tracer) {
-				dbTracer, ok := t.(*dbTracer)
-				s.Require().True(ok)
-				s.NotEqual(slog.Default(), dbTracer.logger, "Should use custom logger")
-			},
-			wantErr: false,
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("ERROR")},
+			status:      codes.Error,
 		},
 		{
-			name:         "successful creation with custom histogram config",
-			databaseName: "test_db",
-			opts: []Option{
-				WithLatencyHistogramConfig("custom.histogram", "ms", "Custom description"),
-			},
-			wantErr: false,
+			name:        "driver error",
+			sql:         getUserSQL,
+			err:         errConnClosed,
+			spanAttrs:   []attribute.KeyValue{pgxOperationQuery, semconv.DBOperationName("GetUser")},
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("UNKNOWN_ERROR")},
+			status:      codes.Error,
 		},
 		{
-			name:         "successful creation with all options",
-			databaseName: "test_db",
-			opts: []Option{
-				WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))),
-				WithShouldLog(func(err error) bool { return err != nil }),
-				WithLogArgs(true),
-				WithLogArgsLenLimit(256),
-				WithIncludeSQLText(true),
-				WithLatencyHistogramConfig("custom.duration", "s", "Custom duration metric",
-					0.1, 10, 100, 1000),
-			},
-			wantErr: false,
-			validateTracer: func(s *DBTracerSuite, t Tracer) {
-				dbTracer, ok := t.(*dbTracer)
-				s.Require().True(ok)
-				s.NotEqual(slog.Default(), dbTracer.logger, "Should use custom logger")
-				s.True(dbTracer.logArgs, "Should enable log args")
-				s.Equal(256, dbTracer.logArgsLenLimit, "Should set custom args length limit")
-				s.True(dbTracer.includeQueryText, "Should include SQL text")
-			},
+			name:        "no rows",
+			sql:         getUserSQL,
+			err:         pgx.ErrNoRows,
+			spanAttrs:   []attribute.KeyValue{pgxOperationQuery, semconv.DBOperationName("GetUser")},
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("UNKNOWN_ERROR")},
+			status:      codes.Error,
 		},
 		{
-			name:         "empty database name",
-			databaseName: "",
-			opts:         []Option{},
-			wantErr:      true,
+			name: "fatal postgres error",
+			sql:  getUserSQL,
+			err:  errAdminShutdown,
+			spanAttrs: []attribute.KeyValue{
+				pgxOperationQuery, semconv.DBOperationName("GetUser"), DBStatusCodeKey.String("57P01"),
+			},
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("FATAL")},
+			status:      codes.Error,
+		},
+		{
+			name:        "query without sqlc header",
+			sql:         rawSQL,
+			spanAttrs:   []attribute.KeyValue{pgxOperationQuery},
+			metricAttrs: []attribute.KeyValue{pgxOperationQuery, PGXStatusKey.String("OK")},
+			status:      codes.Ok,
 		},
 	}
 
 	for _, tt := range tests {
 		s.Run(tt.name, func() {
-			// Use real providers from the suite setup
-			opts := append(tt.opts,
-				WithMeterProvider(s.meterProvider),
-				WithTraceProvider(s.tracerProvider),
-			)
-			tracer, err := NewDBTracer(tt.databaseName, opts...)
+			s.SetupTest()
+			sqlcAttrs := getUserAttrs
+			if tt.sql == rawSQL {
+				sqlcAttrs = nil
+			}
 
-			if tt.wantErr {
-				s.Error(err)
-				s.Nil(tracer)
-			} else {
-				s.NoError(err)
-				s.NotNil(tracer)
-				if tt.validateTracer != nil {
-					tt.validateTracer(s, tracer)
+			s.query(s.tracer, tt.sql, tt.err)
+
+			span := s.requireSpan("postgresql.query")
+			s.Equal(trace.SpanKindClient, span.SpanKind())
+			s.Equal(tt.status, span.Status().Code)
+			s.True(span.EndTime().After(span.StartTime()))
+			s.assertAttributes(concat(dbAttrs, sqlcAttrs, tt.spanAttrs), attribute.NewSet(span.Attributes()...))
+			if tt.err != nil {
+				s.Equal(tt.err.Error(), span.Status().Description)
+				s.Require().Len(span.Events(), 1)
+				s.Equal("exception", span.Events()[0].Name)
+			}
+
+			point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+			s.Equal(uint64(1), point.Count)
+			s.Positive(point.Sum)
+			s.assertAttributes(concat(dbAttrs, sqlcAttrs, tt.metricAttrs), point.Attributes)
+		})
+	}
+}
+
+func (s *DBTracerSuite) TestQueryStartLeavesSpanOpen() {
+	ctx := s.tracer.TraceQueryStart(s.ctx, nil, pgx.TraceQueryStartData{SQL: getUserSQL, Args: []any{1}})
+
+	s.Empty(s.spans.Ended())
+	span, ok := trace.SpanFromContext(ctx).(sdktrace.ReadOnlySpan)
+	s.Require().True(ok)
+	s.Equal("postgresql.query", span.Name())
+	s.assertAttributes(concat(dbAttrs, getUserAttrs, []attribute.KeyValue{
+		pgxOperationQuery, semconv.DBOperationName("GetUser"),
+	}), attribute.NewSet(span.Attributes()...))
+
+	s.tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{})
+
+	s.Len(s.spans.Ended(), 1)
+}
+
+func (s *DBTracerSuite) TestPrepare() {
+	tests := []struct {
+		name            string
+		end             pgx.TracePrepareEndData
+		status          codes.Code
+		pgx             string
+		level           slog.Level
+		alreadyPrepared any
+	}{
+		{
+			name:            "already prepared",
+			end:             pgx.TracePrepareEndData{AlreadyPrepared: true},
+			status:          codes.Ok,
+			pgx:             "OK",
+			level:           slog.LevelInfo,
+			alreadyPrepared: true,
+		},
+		{
+			name:            "newly prepared",
+			end:             pgx.TracePrepareEndData{AlreadyPrepared: false},
+			status:          codes.Ok,
+			pgx:             "OK",
+			level:           slog.LevelInfo,
+			alreadyPrepared: false,
+		},
+		{
+			name:   "fails",
+			end:    pgx.TracePrepareEndData{Err: errConnClosed},
+			status: codes.Error,
+			pgx:    "UNKNOWN_ERROR",
+			level:  slog.LevelError,
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+
+			ctx := s.tracer.TracePrepareStart(s.ctx, nil, pgx.TracePrepareStartData{Name: "stmt_get_user", SQL: getUserSQL})
+			s.tracer.TracePrepareEnd(ctx, nil, tt.end)
+
+			span := s.requireSpan("postgresql.prepare")
+			s.Equal(tt.status, span.Status().Code)
+			s.True(span.EndTime().After(span.StartTime()))
+			s.assertAttributes(concat(dbAttrs, getUserAttrs, []attribute.KeyValue{
+				pgxOperationPrepare, PGXPrepareStmtNameKey.String("stmt_get_user"), semconv.DBOperationName("GetUser"),
+			}), attribute.NewSet(span.Attributes()...))
+			if tt.end.Err != nil {
+				s.Equal(tt.end.Err.Error(), span.Status().Description)
+				s.Require().Len(span.Events(), 1)
+				s.Equal("exception", span.Events()[0].Name)
+			}
+
+			point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+			s.Equal(uint64(1), point.Count)
+			s.Positive(point.Sum)
+			s.assertAttributes(concat(dbAttrs, getUserAttrs, []attribute.KeyValue{
+				pgxOperationPrepare, PGXStatusKey.String(tt.pgx),
+			}), point.Attributes)
+
+			record := s.logs.requireOne(s.T())
+			s.Equal("prepare", record.Message)
+			s.Equal(tt.level, record.Level)
+			s.Equal(tt.alreadyPrepared, logAttr(record, "alreadyPrepared"))
+			s.Equal(uint64(0), logAttr(record, "pid"))
+		})
+	}
+}
+
+func (s *DBTracerSuite) TestBatch() {
+	ctx := s.tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{Batch: batchOf(insertUserSQL, insertUserSQL)})
+	s.tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL, Args: []any{"alice"}})
+	s.tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL, Args: []any{"alice"}, Err: errUniqueViolation})
+	s.tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: errUniqueViolation})
+
+	ended := s.spans.Ended()
+	s.Require().Len(ended, 3)
+	s.Equal("postgresql.batch", ended[2].Name())
+
+	batchSpan := s.requireSpan("postgresql.batch")
+	s.Equal(codes.Error, batchSpan.Status().Code)
+	s.True(batchSpan.EndTime().After(batchSpan.StartTime()))
+	s.assertAttributes(concat(dbAttrs, insertUserAttrs, []attribute.KeyValue{
+		pgxOperationBatch, semconv.DBOperationName("InsertUser"), DBStatusCodeKey.String("23505"),
+	}), attribute.NewSet(batchSpan.Attributes()...))
+
+	querySpans := s.spansNamed("postgresql.batch.query")
+	s.Require().Len(querySpans, 2)
+	for _, span := range querySpans {
+		s.Equal(batchSpan.SpanContext().SpanID(), span.Parent().SpanID())
+	}
+	s.Equal(codes.Ok, querySpans[0].Status().Code)
+	s.assertAttributes(concat(dbAttrs, insertUserAttrs, []attribute.KeyValue{
+		pgxOperationBatchQuery, semconv.DBOperationName("InsertUser"),
+	}), attribute.NewSet(querySpans[0].Attributes()...))
+	s.Equal(codes.Error, querySpans[1].Status().Code)
+	s.assertAttributes(concat(dbAttrs, insertUserAttrs, []attribute.KeyValue{
+		pgxOperationBatchQuery, semconv.DBOperationName("InsertUser"), DBStatusCodeKey.String("23505"),
+	}), attribute.NewSet(querySpans[1].Attributes()...))
+
+	point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+	s.Equal(uint64(1), point.Count)
+	s.Positive(point.Sum)
+	s.assertAttributes(concat(dbAttrs, insertUserAttrs, []attribute.KeyValue{
+		pgxOperationBatch, PGXStatusKey.String("ERROR"),
+	}), point.Attributes)
+}
+
+// pgx reports no further queued query once one fails, and none when sending the batch fails.
+func (s *DBTracerSuite) TestBatchEndEndsUnreportedQuerySpans() {
+	tests := []struct {
+		name       string
+		reported   []error
+		endErr     error
+		pendingErr error
+	}{
+		{name: "first query fails", reported: []error{errUniqueViolation}, endErr: errUniqueViolation, pendingErr: errUniqueViolation},
+		{name: "send fails", endErr: errConnClosed, pendingErr: errConnClosed},
+		{name: "batch ends without error", reported: []error{nil}, pendingErr: errBatchQueryNotExecuted},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+
+			ctx := s.tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{
+				Batch: batchOf(insertUserSQL, insertUserSQL, insertUserSQL),
+			})
+			for _, err := range tt.reported {
+				s.tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL, Err: err})
+			}
+			s.tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: tt.endErr})
+
+			querySpans := s.spansNamed("postgresql.batch.query")
+			s.Require().Len(querySpans, 3)
+			for _, span := range querySpans[len(tt.reported):] {
+				s.Equal(codes.Error, span.Status().Code)
+				s.Equal(tt.pendingErr.Error(), span.Status().Description)
+			}
+			s.Len(s.spansNamed("postgresql.batch"), 1)
+		})
+	}
+}
+
+// pgx ends a batch from SendBatch and again from Close when sending fails.
+func (s *DBTracerSuite) TestBatchEndRecordsOnce() {
+	ctx := s.tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{Batch: batchOf(insertUserSQL)})
+	s.tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: errConnClosed})
+	s.tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{Err: errConnClosed})
+
+	s.Len(s.spansNamed("postgresql.batch"), 1)
+	s.Equal(uint64(1), s.requireHistogramPoint(semconv.DBClientOperationDurationName).Count)
+	s.Equal([]string{"batch end"}, s.logs.messages())
+}
+
+func (s *DBTracerSuite) TestBatchIgnoresQueriesBeyondQueue() {
+	ctx := s.tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{})
+	s.tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL})
+	s.tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{})
+
+	s.Len(s.spans.Ended(), 1)
+	span := s.requireSpan("postgresql.batch")
+	s.Equal(codes.Ok, span.Status().Code)
+	s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxOperationBatch}), attribute.NewSet(span.Attributes()...))
+
+	point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+	s.Positive(point.Sum)
+	s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxOperationBatch, PGXStatusKey.String("OK")}), point.Attributes)
+}
+
+func (s *DBTracerSuite) TestSpanNameSuffix() {
+	tracer := s.newTracer(WithIncludeSpanNameSuffix(true))
+
+	s.query(tracer, getUserSQL, nil)
+	s.query(tracer, rawSQL, nil)
+	ctx := tracer.TracePrepareStart(s.ctx, nil, pgx.TracePrepareStartData{SQL: getUserSQL})
+	tracer.TracePrepareEnd(ctx, nil, pgx.TracePrepareEndData{})
+	ctx = tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{Batch: batchOf(insertUserSQL)})
+	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL})
+	tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{})
+
+	s.ElementsMatch([]string{
+		"postgresql.query GetUser",
+		"postgresql.query",
+		"postgresql.prepare GetUser",
+		"postgresql.batch.query InsertUser",
+		"postgresql.batch InsertUser",
+	}, spanNames(s.spans.Ended()))
+}
+
+func (s *DBTracerSuite) TestIncludeSQLText() {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enabled", enabled: true},
+		{name: "disabled", enabled: false},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+			tracer := s.newTracer(WithIncludeSQLText(tt.enabled))
+
+			s.query(tracer, getUserSQL, nil)
+			ctx := tracer.TracePrepareStart(s.ctx, nil, pgx.TracePrepareStartData{SQL: getUserSQL})
+			tracer.TracePrepareEnd(ctx, nil, pgx.TracePrepareEndData{})
+			ctx = tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{Batch: batchOf(insertUserSQL)})
+			tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL})
+			tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{})
+
+			want := map[string]string{
+				"postgresql.query":       getUserSQL,
+				"postgresql.prepare":     getUserSQL,
+				"postgresql.batch.query": insertUserSQL,
+				"postgresql.batch":       "",
+			}
+			for name, sql := range want {
+				attrs := attribute.NewSet(s.requireSpan(name).Attributes()...)
+				text, ok := attrs.Value(semconv.DBQueryTextKey)
+				s.Equal(tt.enabled && sql != "", ok, name)
+				if ok {
+					s.Equal(sql, text.AsString(), name)
 				}
 			}
 		})
 	}
 }
 
-func (s *DBTracerSuite) TestTraceQueryStart() {
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
-
-	s.NotNil(ctx)
-	queryData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	s.NotNil(queryData)
-	s.Equal(s.defaultQuerySQL.statement, queryData.sql)
-	s.Equal([]interface{}{1}, queryData.args)
-
-	// Verify that a span was started (but not ended yet)
-	spans := s.spanRecorder.Ended()
-	s.Len(spans, 0, "span should not be ended yet")
-
-	span := trace.SpanFromContext(ctx).(sdktrace.ReadOnlySpan)
-	s.Equal("postgresql.query", span.Name())
-
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
+func (s *DBTracerSuite) TestConnect() {
+	tests := []struct {
+		name   string
+		err    error
+		status codes.Code
+		pgx    string
+		level  slog.Level
+	}{
+		{name: "succeeds", status: codes.Ok, pgx: "OK", level: slog.LevelInfo},
+		{name: "fails", err: errConnClosed, status: codes.Error, pgx: "UNKNOWN_ERROR", level: slog.LevelError},
 	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("query", attrMap[PGXOperationTypeKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-}
 
-func (s *DBTracerSuite) TestTraceQueryEnd_Success() {
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
 
-	s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        nil,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.query", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("query", attrMap[PGXOperationTypeKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationQuery,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceQueryEnd_Error() {
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
-
-	expectedErr := errors.New("database error")
-
-	s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        expectedErr,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.query", span.Name())
-	s.Equal(codes.Error, span.Status().Code)
-	s.Equal(expectedErr.Error(), span.Status().Description)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("query", attrMap[PGXOperationTypeKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify that the span has recorded events (error recording)
-	events := span.Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationQuery,
-		PGXStatusKey.String("UNKNOWN_ERROR"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceQueryDuration() {
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
-
-	s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        nil,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.query", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check that duration is positive (actual execution time)
-	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration > 0, "Duration should be positive, got %v", duration)
-
-	// Verify metrics - the recorded duration should be in seconds
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	// Duration should be positive
-	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationQuery,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceBatchDuration() {
-	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
-
-	s.dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []interface{}{1},
-		CommandTag: pgconn.CommandTag{},
-	})
-
-	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.batch", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal("batch", attrMap[PGXOperationTypeKey])
-
-	// Check that duration is positive (actual execution time)
-	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration > 0, "Duration should be positive, got %v", duration)
-
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	// Duration should be positive
-	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
-
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationBatch,
-		PGXStatusKey.String("OK"),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTracePrepareWithDuration() {
-	prepareSQL := s.defaultQuerySQL
-	stmtName := "get_user_by_id"
-
-	ctx := s.dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
-		Name: stmtName,
-		SQL:  prepareSQL.statement,
-	})
-
-	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
-		AlreadyPrepared: false,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.prepare", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("prepare", attrMap[PGXOperationTypeKey])
-	s.Equal(stmtName, attrMap[PGXPrepareStmtNameKey])
-
-	// Check that duration is positive (actual execution time)
-	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration > 0, "Duration should be positive, got %v", duration)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	// Duration should be positive
-	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationPrepare,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTracePrepareAlreadyPrepared() {
-	prepareSQL := s.defaultQuerySQL
-	stmtName := "get_user_by_id"
-
-	ctx := s.dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
-		Name: stmtName,
-		SQL:  prepareSQL.statement,
-	})
-
-	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
-		AlreadyPrepared: true,
-	})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.prepare", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("prepare", attrMap[PGXOperationTypeKey])
-	s.Equal(stmtName, attrMap[PGXPrepareStmtNameKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationPrepare,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.True(expectedAttrs.Equals(&point.Attributes))
-}
-
-func (s *DBTracerSuite) TestTracePrepareError() {
-	prepareSQL := s.defaultQuerySQL
-	stmtName := "get_user_by_id"
-	expectedErr := errors.New("prepare failed")
-
-	ctx := s.dbTracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
-		Name: stmtName,
-		SQL:  prepareSQL.statement,
-	})
-
-	s.dbTracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
-		Err: expectedErr,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.prepare", span.Name())
-	s.Equal(codes.Error, span.Status().Code)
-	s.Equal(expectedErr.Error(), span.Status().Description)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("prepare", attrMap[PGXOperationTypeKey])
-	s.Equal(stmtName, attrMap[PGXPrepareStmtNameKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify that the span has recorded events (error recording)
-	events := span.Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationPrepare,
-		PGXStatusKey.String("UNKNOWN_ERROR"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceConnectSuccess() {
-	connConfig := &pgx.ConnConfig{}
-
-	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
-		ConnConfig: connConfig,
-	})
-
-	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
-		Conn: s.pgxConn,
-		Err:  nil,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.connect", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Check that duration is positive (actual execution time)
-	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration > 0, "Duration should be positive, got %v", duration)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationConnect,
-		PGXStatusKey.String("OK"),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceConnectError() {
-	connConfig := &pgx.ConnConfig{}
-	expectedErr := errors.New("connection failed")
-
-	ctx := s.dbTracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
-		ConnConfig: connConfig,
-	})
-
-	s.dbTracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{
-		Conn: nil,
-		Err:  expectedErr,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.connect", span.Name())
-	s.Equal(codes.Error, span.Status().Code)
-	s.Equal(expectedErr.Error(), span.Status().Description)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify that the span has recorded events (error recording)
-	events := span.Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationConnect,
-		PGXStatusKey.String("UNKNOWN_ERROR"),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceCopyFromSuccess() {
-	tableName := pgx.Identifier{"users"}
-	columnNames := []string{"id", "name"}
-
-	ctx := s.dbTracer.TraceCopyFromStart(s.ctx, s.pgxConn, pgx.TraceCopyFromStartData{
-		TableName:   tableName,
-		ColumnNames: columnNames,
-	})
-
-	s.dbTracer.TraceCopyFromEnd(ctx, s.pgxConn, pgx.TraceCopyFromEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        nil,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.copy_from", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal("copy_from", attrMap[PGXOperationTypeKey])
-	s.Equal("\"users\"", attrMap[semconv.DBCollectionNameKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Check that duration is positive
-	duration := span.EndTime().Sub(span.StartTime())
-	s.True(duration > 0, "Duration should be positive, got %v", duration)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0, "Recorded duration should be positive, got %v", point.Sum)
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationCopyFrom,
-		PGXStatusKey.String("OK"),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceCopyFromError() {
-	tableName := pgx.Identifier{"users"}
-	columnNames := []string{"id", "name"}
-	expectedErr := errors.New("copy failed")
-
-	ctx := s.dbTracer.TraceCopyFromStart(s.ctx, s.pgxConn, pgx.TraceCopyFromStartData{
-		TableName:   tableName,
-		ColumnNames: columnNames,
-	})
-
-	s.dbTracer.TraceCopyFromEnd(ctx, s.pgxConn, pgx.TraceCopyFromEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        expectedErr,
-	})
-
-	// Verify spans
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.copy_from", span.Name())
-	s.Equal(codes.Error, span.Status().Code)
-	s.Equal(expectedErr.Error(), span.Status().Description)
-
-	// Check span attributes
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
-		}
-	}
-	s.Equal("copy_from", attrMap[PGXOperationTypeKey])
-	s.Equal("\"users\"", attrMap[semconv.DBCollectionNameKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
-
-	// Verify that the span has recorded events (error recording)
-	events := span.Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
-
-	// Verify metrics
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-
-	// Check attributes
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationCopyFrom,
-		PGXStatusKey.String("UNKNOWN_ERROR"),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceConcurrent() {
-	const numQueries = 10
-	var wg sync.WaitGroup
-
-	for i := 0; i < numQueries; i++ {
-		wg.Add(1)
-		go func(queryID int) {
-			defer wg.Done()
-
-			ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-				SQL:  s.defaultQuerySQL.statement,
-				Args: []interface{}{queryID},
+			ctx := s.tracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{
+				ConnConfig: &pgx.ConnConfig{Config: pgconn.Config{Host: "db.local", Port: 5432, Database: testDBName}},
 			})
+			s.tracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{Err: tt.err})
 
-			s.dbTracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
-				CommandTag: pgconn.CommandTag{},
-				Err:        nil,
+			span := s.requireSpan("postgresql.connect")
+			s.Equal(tt.status, span.Status().Code)
+			s.True(span.EndTime().After(span.StartTime()))
+			s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxOperationConnect}), attribute.NewSet(span.Attributes()...))
+			if tt.err != nil {
+				s.Equal(tt.err.Error(), span.Status().Description)
+				s.Require().Len(span.Events(), 1)
+				s.Equal("exception", span.Events()[0].Name)
+			}
+
+			point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+			s.Equal(uint64(1), point.Count)
+			s.Positive(point.Sum)
+			s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxOperationConnect, PGXStatusKey.String(tt.pgx)}), point.Attributes)
+
+			record := s.logs.requireOne(s.T())
+			s.Equal(tt.level, record.Level)
+			s.Equal("db.local", logAttr(record, "host"))
+			s.Equal(uint64(5432), logAttr(record, "port"))
+		})
+	}
+}
+
+func (s *DBTracerSuite) TestCopyFrom() {
+	tests := []struct {
+		name     string
+		end      pgx.TraceCopyFromEndData
+		status   codes.Code
+		pgx      string
+		level    slog.Level
+		rowCount any
+	}{
+		{
+			name:     "succeeds",
+			end:      pgx.TraceCopyFromEndData{CommandTag: pgconn.NewCommandTag("COPY 3")},
+			status:   codes.Ok,
+			pgx:      "OK",
+			level:    slog.LevelInfo,
+			rowCount: int64(3),
+		},
+		{
+			name:   "fails",
+			end:    pgx.TraceCopyFromEndData{Err: errConnClosed},
+			status: codes.Error,
+			pgx:    "UNKNOWN_ERROR",
+			level:  slog.LevelError,
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+
+			ctx := s.tracer.TraceCopyFromStart(s.ctx, nil, pgx.TraceCopyFromStartData{
+				TableName:   pgx.Identifier{"public", "users"},
+				ColumnNames: []string{"id", "name"},
 			})
-		}(i)
+			s.tracer.TraceCopyFromEnd(ctx, nil, tt.end)
+
+			span := s.requireSpan("postgresql.copy_from")
+			s.Equal(tt.status, span.Status().Code)
+			s.True(span.EndTime().After(span.StartTime()))
+			s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{
+				pgxOperationCopyFrom, semconv.DBCollectionName(`"public"."users"`),
+			}), attribute.NewSet(span.Attributes()...))
+			if tt.end.Err != nil {
+				s.Equal(tt.end.Err.Error(), span.Status().Description)
+				s.Require().Len(span.Events(), 1)
+				s.Equal("exception", span.Events()[0].Name)
+			}
+
+			point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+			s.Equal(uint64(1), point.Count)
+			s.Positive(point.Sum)
+			s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxOperationCopyFrom, PGXStatusKey.String(tt.pgx)}), point.Attributes)
+
+			record := s.logs.requireOne(s.T())
+			s.Equal(tt.level, record.Level)
+			s.Equal(tt.rowCount, logAttr(record, "rowCount"))
+		})
 	}
-
-	wg.Wait()
-
-	// Verify all spans were created
-	spans := s.spanRecorder.Ended()
-	s.Len(spans, numQueries)
-
-	// Verify all spans have correct attributes
-	for _, span := range spans {
-		s.Equal("postgresql.query", span.Name())
-		s.Equal(codes.Ok, span.Status().Code)
-
-		attrs := span.Attributes()
-		attrMap := s.attributesToMap(attrs)
-		s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
-		s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
-		s.Equal("query", attrMap[PGXOperationTypeKey].AsString())
-		s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-		s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey].AsString())
-	}
-
-	// Verify metrics were aggregated correctly
-	// All concurrent queries have the same attributes, so they should be aggregated into a single data point
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1, "Expected single aggregated data point for queries with identical attributes")
-
-	point := histogramPoints[0]
-	s.Equal(uint64(numQueries), point.Count, "Expected count to equal number of concurrent queries")
-	s.True(point.Sum > 0, "Expected positive sum of all durations")
-
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationQuery,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, point.Attributes)
 }
 
-func (s *DBTracerSuite) TestLoggerBehavior() {
-	// Test that logger can be accessed through the tracer
-	dbTracer, ok := s.dbTracer.(*dbTracer)
-	s.Require().True(ok)
-	s.NotNil(dbTracer.logger)
+func (s *DBTracerSuite) TestPoolAcquireAndRelease() {
+	ctx := s.tracer.TraceAcquireStart(s.ctx, nil, pgxpool.TraceAcquireStartData{})
+	s.tracer.TraceAcquireEnd(ctx, nil, pgxpool.TraceAcquireEndData{})
+	ctx = s.tracer.TraceAcquireStart(s.ctx, nil, pgxpool.TraceAcquireStartData{})
+	s.tracer.TraceAcquireEnd(ctx, nil, pgxpool.TraceAcquireEndData{Err: context.DeadlineExceeded})
+	s.tracer.TraceRelease(nil, pgxpool.TraceReleaseData{})
+
+	spans := s.spansNamed("pgxpool.acquire")
+	s.Require().Len(spans, 2)
+	s.Equal(codes.Ok, spans[0].Status().Code)
+	s.Equal(codes.Error, spans[1].Status().Code)
+	s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxPoolConnOperationAcquire}), attribute.NewSet(spans[0].Attributes()...))
+
+	acquires := s.counterPoints("pgx.pool.trace.acquire.count")
+	s.Require().Len(acquires, 2)
+	waits := s.histogramPoints("pgx.pool.trace.acquire.duration")
+	s.Require().Len(waits, 2)
+	for i, status := range []string{"OK", "UNKNOWN_ERROR"} {
+		statusAttr := PGXStatusKey.String(status)
+		s.Equal(int64(1), acquires[i].Value)
+		s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxPoolConnOperationAcquire, statusAttr}), acquires[i].Attributes)
+		s.Equal(uint64(1), waits[i].Count)
+		s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{statusAttr}), waits[i].Attributes)
+	}
+
+	releases := s.requireCounterPoint("pgx.pool.trace.release.count")
+	s.Equal(int64(1), releases.Value)
+	s.assertAttributes(concat(dbAttrs, []attribute.KeyValue{pgxPoolConnOperationReleased}), releases.Attributes)
 }
 
-// Test coverage for missing options and edge cases
-func (s *DBTracerSuite) TestNewDBTracerWithAllOptions() {
-	customLogger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	customShouldLog := func(err error) bool { return err != nil }
+func (s *DBTracerSuite) TestNonRecordingTracerProvider() {
+	s.tracerProvider = noop.NewTracerProvider()
+	tracer := s.newTracer()
 
-	tracer, err := NewDBTracer(
-		"test_db",
-		WithLogger(customLogger),
-		WithShouldLog(customShouldLog),
-		WithMeterProvider(s.meterProvider),
+	s.query(tracer, getUserSQL, nil)
+	ctx := tracer.TracePrepareStart(s.ctx, nil, pgx.TracePrepareStartData{SQL: getUserSQL})
+	tracer.TracePrepareEnd(ctx, nil, pgx.TracePrepareEndData{})
+	ctx = tracer.TraceBatchStart(s.ctx, nil, pgx.TraceBatchStartData{Batch: batchOf(insertUserSQL)})
+	tracer.TraceBatchQuery(ctx, nil, pgx.TraceBatchQueryData{SQL: insertUserSQL})
+	tracer.TraceBatchEnd(ctx, nil, pgx.TraceBatchEndData{})
+	ctx = tracer.TraceCopyFromStart(s.ctx, nil, pgx.TraceCopyFromStartData{TableName: pgx.Identifier{"users"}})
+	tracer.TraceCopyFromEnd(ctx, nil, pgx.TraceCopyFromEndData{})
+	ctx = tracer.TraceConnectStart(s.ctx, pgx.TraceConnectStartData{ConnConfig: &pgx.ConnConfig{}})
+	tracer.TraceConnectEnd(ctx, pgx.TraceConnectEndData{})
+	ctx = tracer.TraceAcquireStart(s.ctx, nil, pgxpool.TraceAcquireStartData{})
+	tracer.TraceAcquireEnd(ctx, nil, pgxpool.TraceAcquireEndData{})
+
+	var operations []string
+	for _, point := range s.histogramPoints(semconv.DBClientOperationDurationName) {
+		op, _ := point.Attributes.Value(PGXOperationTypeKey)
+		operations = append(operations, op.AsString())
+	}
+	s.ElementsMatch([]string{"query", "prepare", "batch", "copy_from", "connect"}, operations)
+	s.Len(s.histogramPoints("pgx.pool.trace.acquire.duration"), 1)
+	s.ElementsMatch([]string{
+		"query", "prepare", "batch query", "batch end", "copy_from", "database connect", "acquire connection",
+	}, s.logs.messages())
+}
+
+func (s *DBTracerSuite) TestEndHooksWithoutStartRecordNothing() {
+	s.NotPanics(func() {
+		s.tracer.TraceQueryEnd(s.ctx, nil, pgx.TraceQueryEndData{})
+		s.tracer.TraceBatchQuery(s.ctx, nil, pgx.TraceBatchQueryData{})
+		s.tracer.TraceBatchEnd(s.ctx, nil, pgx.TraceBatchEndData{})
+		s.tracer.TraceConnectEnd(s.ctx, pgx.TraceConnectEndData{})
+		s.tracer.TraceCopyFromEnd(s.ctx, nil, pgx.TraceCopyFromEndData{})
+		s.tracer.TracePrepareEnd(s.ctx, nil, pgx.TracePrepareEndData{})
+		s.tracer.TraceAcquireEnd(s.ctx, nil, pgxpool.TraceAcquireEndData{})
+	})
+
+	s.Empty(s.spans.Ended())
+	s.Empty(s.collect())
+	s.Empty(s.logs.messages())
+}
+
+func (s *DBTracerSuite) TestDefaultLogger() {
+	previous := slog.Default()
+	defer slog.SetDefault(previous)
+	slog.SetDefault(slog.New(s.logs))
+
+	tracer, err := NewDBTracer(testDBName, WithTraceProvider(s.tracerProvider), WithMeterProvider(s.meterProvider))
+	s.Require().NoError(err)
+
+	s.query(tracer, getUserSQL, nil)
+
+	s.Equal([]string{"query"}, s.logs.messages())
+}
+
+func (s *DBTracerSuite) TestAllOptions() {
+	tracer, err := NewDBTracer(testDBName,
 		WithTraceProvider(s.tracerProvider),
+		WithMeterProvider(s.meterProvider),
+		WithLogger(slog.New(s.logs)),
+		WithShouldLog(errorsOnly),
 		WithLogArgs(false),
 		WithLogArgsLenLimit(128),
 		WithIncludeSQLText(true),
+		WithIncludeSpanNameSuffix(true),
 		WithLatencyHistogramConfig("custom.duration", "ms", "Custom duration metric"),
 	)
-
-	s.NoError(err)
-	s.NotNil(tracer)
-
-	dbTracer, ok := tracer.(*dbTracer)
-	s.True(ok)
-	s.Equal(customLogger, dbTracer.logger)
-	s.False(dbTracer.logArgs)
-	s.Equal(128, dbTracer.logArgsLenLimit)
-	s.True(dbTracer.includeQueryText)
-}
-
-func (s *DBTracerSuite) TestLogQueryArgsWithDifferentTypes() {
-	// Test with logArgs disabled
-	tracer, err := NewDBTracer(
-		"test_db",
-		WithLogArgs(false),
-		WithMeterProvider(s.meterProvider),
-		WithTraceProvider(s.tracerProvider),
-	)
-	s.NoError(err)
-
-	dbTracerImpl := tracer.(*dbTracer)
-
-	// Should return nil when logArgs is false
-	result := dbTracerImpl.logQueryArgs([]any{"test", 123, []byte("data")})
-	s.Nil(result)
-
-	// Test with logArgs enabled and different data types
-	tracer2, err := NewDBTracer(
-		"test_db",
-		WithLogArgs(true),
-		WithLogArgsLenLimit(10),
-		WithMeterProvider(s.meterProvider),
-		WithTraceProvider(s.tracerProvider),
-	)
-	s.NoError(err)
-
-	dbTracer2 := tracer2.(*dbTracer)
-
-	// Test with various data types
-	args := []any{
-		"short",
-		"this is a very long string that should be truncated",
-		[]byte("short"),
-		[]byte("this is a very long byte array that should be truncated"),
-		123,
-		nil,
-	}
-
-	result = dbTracer2.logQueryArgs(args)
-	s.NotNil(result)
-	s.Len(result, len(args))
-
-	// Check that long string was truncated
-	s.Contains(result[1].(string), "truncated")
-	// Check that long byte array was truncated
-	s.Contains(result[3].(string), "truncated")
-}
-
-func (s *DBTracerSuite) TestExtractConnectionID() {
-	// Test with nil connection
-	id := extractConnectionID(nil)
-	s.Equal(uint32(0), id)
-
-	// Note: Testing with real pgx.Conn is complex due to its internal structure
-	// The function is designed to handle nil gracefully, which we've tested
-}
-
-func (s *DBTracerSuite) TestPgxStatusFromErr() {
-	// Test with nil error
-	status := pgxStatusFromErr(nil)
-	s.Equal("OK", status)
-
-	// Test with generic error
-	genericErr := errors.New("generic error")
-	status = pgxStatusFromErr(genericErr)
-	s.Equal("UNKNOWN_ERROR", status)
-
-	// Test with pgx.ErrNoRows (should still return UNKNOWN_ERROR)
-	status = pgxStatusFromErr(pgx.ErrNoRows)
-	s.Equal("UNKNOWN_ERROR", status)
-
-	// Test with a wrapped pgconn.PgError (should return its severity)
-	pgErr := &pgconn.PgError{Severity: "FATAL", Code: "23505", Message: "duplicate key"}
-	status = pgxStatusFromErr(fmt.Errorf("scanning row: %w", pgErr))
-	s.Equal("FATAL", status)
-}
-
-func (s *DBTracerSuite) TestPgxStatusFromErr_WithWrappedPgError() {
-	wrappedPgErr := fmt.Errorf("wrapped: %w", &pgconn.PgError{
-		Severity: "ERROR",
-		Code:     "23505",
-		Message:  "duplicate key value violates unique constraint",
-	})
-
-	status := pgxStatusFromErr(wrappedPgErr)
-	s.Equal("ERROR", status)
-}
-
-func (s *DBTracerSuite) TestRecordSpanErrorWithPgError() {
-	// Start a query to get a real span
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
-
-	span := trace.SpanFromContext(ctx)
-
-	dbTracer := s.dbTracer.(*dbTracer)
-
-	// Test with nil error (should not record anything)
-	dbTracer.recordSpanError(span, nil)
-
-	// End the span and check it has no error status
-	span.End()
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	s.Equal(codes.Unset, spans[0].Status().Code)
-
-	s.resetRecorders()
-
-	ctx = s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{2},
-	})
-
-	span = trace.SpanFromContext(ctx)
-
-	span.End()
-
-	spans = s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-
-	s.resetRecorders()
-
-	ctx = s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []any{3},
-	})
-
-	span = trace.SpanFromContext(ctx)
-
-	testErr := fmt.Errorf("wrapped pg error: %w", &pgconn.PgError{
-		Severity: "ERROR",
-		Code:     "23505",
-		Message:  "duplicate key value violates unique constraint",
-	})
-	dbTracer.recordSpanError(span, testErr)
-	span.End()
-
-	spans = s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	s.Equal(codes.Error, spans[0].Status().Code)
-	s.Equal(testErr.Error(), spans[0].Status().Description)
-
-	attrs := s.attributesToMap(spans[0].Attributes())
-	dbStatusCode, ok := attrs[DBStatusCodeKey]
-	s.True(ok)
-	s.Equal("23505", dbStatusCode.AsString())
-
-	// Verify that the error was recorded as an event
-	events := spans[0].Events()
-	s.Require().Len(events, 1)
-	s.Equal("exception", events[0].Name)
-}
-
-func (s *DBTracerSuite) TestRecordSpanErrorSetsPgStatusCode() {
-	ctx := s.dbTracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []any{1},
-	})
-	span := trace.SpanFromContext(ctx)
-
-	dbTracer := s.dbTracer.(*dbTracer)
-	pgErr := &pgconn.PgError{Severity: "ERROR", Code: "23505", Message: "duplicate key value"}
-	dbTracer.recordSpanError(span, fmt.Errorf("creating user: %w", pgErr))
-	span.End()
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	s.Equal(codes.Error, spans[0].Status().Code)
-
-	attrMap := s.attributesToMap(spans[0].Attributes())
-	s.Equal("23505", attrMap[DBStatusCodeKey].AsString())
-}
-
-func (s *DBTracerSuite) TestTraceBatchWithMultipleQueries() {
-	// Start batch
-	ctx := s.dbTracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{
-		Batch: &pgx.Batch{
-			QueuedQueries: []*pgx.QueuedQuery{
-				{
-					SQL:       s.defaultQuerySQL.statement,
-					Arguments: []any{1},
-					Fn:        nil,
-				},
-				{
-					SQL:       s.defaultQuerySQL.statement,
-					Arguments: []any{2},
-					Fn:        nil,
-				},
-			},
-		},
-	})
-
-	s.dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []any{1},
-		CommandTag: pgconn.CommandTag{},
-	})
-
-	batchErr := errors.New("batch query error")
-	s.dbTracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []any{2},
-		CommandTag: pgconn.CommandTag{},
-		Err:        batchErr,
-	})
-
-	s.dbTracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{Err: batchErr})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 3)
-
-	s.Equal("postgresql.batch.query", spans[0].Name())
-	s.Equal(codes.Ok, spans[0].Status().Code)
-
-	s.Equal("postgresql.batch.query", spans[1].Name())
-	s.Equal(codes.Error, spans[1].Status().Code)
-
-	s.Equal("postgresql.batch", spans[2].Name())
-	s.Equal(codes.Error, spans[2].Status().Code)
-
-	// check one of batch queries attrs
-	attrs := spans[0].Attributes()
-	attrMap := s.attributesToMap(attrs)
-	s.Equal("batch.query", attrMap[PGXOperationTypeKey].AsString())
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-	s.Equal(s.defaultQuerySQL.name, attrMap[semconv.DBOperationNameKey].AsString())
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
-
-	// check batch end attrs
-	attrs = spans[2].Attributes()
-	attrMap = s.attributesToMap(attrs)
-
-	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	point := histogramPoints[0]
-	s.Equal(uint64(1), point.Count)
-	s.True(point.Sum > 0) // Duration should be positive
-}
-
-func (s *DBTracerSuite) TestTraceBatchStart_WithSpanNameSuffix() {
-	tracer, err := NewDBTracer(
-		s.defaultDBName,
-		WithTraceProvider(s.tracerProvider),
-		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog()),
-		WithLogger(s.logger),
-		WithIncludeSpanNameSuffix(true),
-	)
 	s.Require().NoError(err)
 
-	ctx := tracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{
-		Batch: &pgx.Batch{
-			QueuedQueries: []*pgx.QueuedQuery{
-				{SQL: s.defaultQuerySQL.statement, Arguments: []any{1}},
-				{SQL: s.defaultQuerySQL.statement, Arguments: []any{2}},
-			},
-		},
-	})
+	s.query(tracer, getUserSQL, nil)
+	s.query(tracer, getUserSQL, errConnClosed)
 
-	tracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []any{1},
-		CommandTag: pgconn.CommandTag{},
-	})
-	tracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []any{2},
-		CommandTag: pgconn.CommandTag{},
-	})
-
-	tracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 3)
-
-	// Child query spans carry the operation name suffix.
-	expectedQuerySpanName := "postgresql.batch.query " + s.defaultQuerySQL.name
-	s.Equal(expectedQuerySpanName, spans[0].Name())
-	s.Equal(expectedQuerySpanName, spans[1].Name())
-
-	// The batch span itself carries the operation name suffix and attributes,
-	// so it is identifiable in trace UIs instead of a generic "postgresql.batch".
-	batchSpan := spans[2]
-	s.Equal("postgresql.batch "+s.defaultQuerySQL.name, batchSpan.Name())
-
-	attrMap := s.attributesToMap(batchSpan.Attributes())
-	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
-	s.Equal(s.defaultQuerySQL.name, attrMap[semconv.DBOperationNameKey].AsString())
-
-	// The batch metric is enriched with the query name, matching normal queries.
-	histogramPoints := s.getHistogramPoints()
-	s.Require().Len(histogramPoints, 1)
-
-	expectedAttrs := attribute.NewSet(
-		semconv.DBSystemPostgreSQL,
-		semconv.DBNamespace(s.defaultDBName),
-		pgxOperationBatch,
-		PGXStatusKey.String("OK"),
-		SQLCQueryNameKey.String(s.defaultQuerySQL.name),
-		SQLCQueryCommandKey.String(s.defaultQuerySQL.command),
-	)
-	s.EqualAttributeSet(expectedAttrs, histogramPoints[0].Attributes)
-}
-
-func (s *DBTracerSuite) TestTraceWithIncludeSQLText() {
-	tracer, err := NewDBTracer(
-		"test_db",
-		WithIncludeSQLText(true),
-		WithMeterProvider(s.meterProvider),
-		WithTraceProvider(s.tracerProvider),
-	)
-	s.NoError(err)
-
-	dbTracer := tracer.(*dbTracer)
-	s.True(dbTracer.includeQueryText)
-}
-
-func (s *DBTracerSuite) TestShouldLogFunctionality() {
-	customShouldLog := func(err error) bool {
-		return err != nil && !errors.Is(err, pgx.ErrNoRows)
+	spans := s.spansNamed("postgresql.query GetUser")
+	s.Require().Len(spans, 2)
+	for _, span := range spans {
+		attrs := attribute.NewSet(span.Attributes()...)
+		text, ok := attrs.Value(semconv.DBQueryTextKey)
+		s.True(ok)
+		s.Equal(getUserSQL, text.AsString())
 	}
 
-	tracer, err := NewDBTracer(
-		"test_db",
-		WithShouldLog(customShouldLog),
-		WithMeterProvider(s.meterProvider),
-		WithTraceProvider(s.tracerProvider),
-	)
-	s.NoError(err)
+	m := s.requireMetric("custom.duration")
+	s.Equal("ms", m.Unit)
+	s.Equal("Custom duration metric", m.Description)
 
-	dbTracer := tracer.(*dbTracer)
-
-	s.True(dbTracer.shouldLog(errors.New("some error")))
-	s.False(dbTracer.shouldLog(pgx.ErrNoRows))
-	s.False(dbTracer.shouldLog(nil))
+	record := s.logs.requireOne(s.T())
+	s.Equal(slog.LevelError, record.Level)
+	s.Nil(logAttr(record, "args"))
 }
 
-func (s *DBTracerSuite) TestTraceQueryStart_WithSpanNameSuffix() {
-	tracer, err := NewDBTracer(
-		s.defaultDBName,
-		WithTraceProvider(s.tracerProvider),
-		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog()),
-		WithLogger(s.logger),
-		WithIncludeSpanNameSuffix(true),
-	)
-	s.Require().NoError(err)
+func (s *DBTracerSuite) TestShouldLog() {
+	tests := []struct {
+		name      string
+		shouldLog ShouldLog
+		err       error
+		level     *slog.Level
+	}{
+		{name: "default logs success at info", err: nil, level: ptr(slog.LevelInfo)},
+		{name: "default logs failure at error", err: errConnClosed, level: ptr(slog.LevelError)},
+		{name: "errors only skips success", shouldLog: errorsOnly, err: nil},
+		{name: "errors only logs failure", shouldLog: errorsOnly, err: errConnClosed, level: ptr(slog.LevelError)},
+		{name: "filter receives the error", shouldLog: func(err error) bool { return !errors.Is(err, pgx.ErrNoRows) }, err: pgx.ErrNoRows},
+	}
 
-	ctx := tracer.TraceQueryStart(s.ctx, s.pgxConn, pgx.TraceQueryStartData{
-		SQL:  s.defaultQuerySQL.statement,
-		Args: []interface{}{1},
-	})
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+			var opts []Option
+			if tt.shouldLog != nil {
+				opts = append(opts, WithShouldLog(tt.shouldLog))
+			}
 
-	s.NotNil(ctx)
-	traceData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	s.NotNil(traceData)
-	s.Equal(s.defaultQuerySQL.statement, traceData.sql)
-	s.Equal([]interface{}{1}, traceData.args)
+			s.query(s.newTracer(opts...), getUserSQL, tt.err)
 
-	tracer.TraceQueryEnd(ctx, s.pgxConn, pgx.TraceQueryEndData{
-		CommandTag: pgconn.CommandTag{},
-		Err:        nil,
-	})
+			if tt.level == nil {
+				s.Empty(s.logs.messages())
+				return
+			}
+			record := s.logs.requireOne(s.T())
+			s.Equal(*tt.level, record.Level)
+			s.Equal("GetUser", logAttr(record, "query_name"))
+			if tt.err != nil {
+				s.Equal(tt.err.Error(), logAttr(record, "error"))
+			}
+		})
+	}
+}
 
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.query get_users", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
+func (s *DBTracerSuite) TestLogArgs() {
+	args := []any{"héllo", []byte{0xde, 0xad, 0xbe, 0xef}, []byte{0x01}, 42, nil}
 
-	attrs := span.Attributes()
-	attrMap := make(map[attribute.Key]string)
-	for _, attr := range attrs {
-		if attr.Value.Type() == attribute.STRING {
-			attrMap[attr.Key] = attr.Value.AsString()
+	tests := []struct {
+		name string
+		opts []Option
+		want any
+	}{
+		{
+			name: "truncated on rune boundary",
+			opts: []Option{WithLogArgsLenLimit(2)},
+			want: []any{"hé (truncated 3 bytes)", "dead (truncated 2 bytes)", "01", 42, nil},
+		},
+		{
+			name: "non-positive limit uses default",
+			opts: []Option{WithLogArgsLenLimit(-1)},
+			want: []any{"héllo", "deadbeef", "01", 42, nil},
+		},
+		{
+			name: "disabled",
+			opts: []Option{WithLogArgs(false)},
+			want: []any(nil),
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+			tracer := s.newTracer(tt.opts...)
+
+			ctx := tracer.TraceQueryStart(s.ctx, nil, pgx.TraceQueryStartData{SQL: getUserSQL, Args: args})
+			tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{})
+
+			s.Equal(tt.want, logAttr(s.logs.requireOne(s.T()), "args"))
+		})
+	}
+}
+
+func (s *DBTracerSuite) TestLatencyHistogramConfig() {
+	tests := []struct {
+		name        string
+		opts        []Option
+		metricName  string
+		unit        string
+		description string
+		bounds      []float64
+	}{
+		{
+			name:        "default",
+			metricName:  semconv.DBClientOperationDurationName,
+			unit:        semconv.DBClientOperationDurationUnit,
+			description: semconv.DBClientOperationDurationDescription,
+			bounds:      defaultBucketBoundaries,
+		},
+		{
+			name:        "custom",
+			opts:        []Option{WithLatencyHistogramConfig("db.query.latency", "ms", "query latency", 1, 10, 100)},
+			metricName:  "db.query.latency",
+			unit:        "ms",
+			description: "query latency",
+			bounds:      []float64{1, 10, 100},
+		},
+		{
+			name:        "custom without bounds keeps default bounds",
+			opts:        []Option{WithLatencyHistogramConfig("db.query.latency", "s", "query latency")},
+			metricName:  "db.query.latency",
+			unit:        "s",
+			description: "query latency",
+			bounds:      defaultBucketBoundaries,
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			s.SetupTest()
+
+			s.query(s.newTracer(tt.opts...), getUserSQL, nil)
+
+			m := s.requireMetric(tt.metricName)
+			s.Equal(tt.unit, m.Unit)
+			s.Equal(tt.description, m.Description)
+			hist, ok := m.Data.(metricdata.Histogram[float64])
+			s.Require().True(ok)
+			s.Require().Len(hist.DataPoints, 1)
+			s.Equal(tt.bounds, hist.DataPoints[0].Bounds)
+		})
+	}
+}
+
+func (s *DBTracerSuite) TestConcurrentQueries() {
+	const n = 50
+
+	var wg sync.WaitGroup
+	for range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.query(s.tracer, getUserSQL, nil)
+		}()
+	}
+	wg.Wait()
+
+	spans := s.spansNamed("postgresql.query")
+	s.Len(spans, n)
+	for _, span := range spans {
+		s.Equal(codes.Ok, span.Status().Code)
+		s.assertAttributes(concat(dbAttrs, getUserAttrs, []attribute.KeyValue{
+			pgxOperationQuery, semconv.DBOperationName("GetUser"),
+		}), attribute.NewSet(span.Attributes()...))
+	}
+
+	point := s.requireHistogramPoint(semconv.DBClientOperationDurationName)
+	s.Equal(uint64(n), point.Count)
+	s.Positive(point.Sum)
+	s.assertAttributes(concat(dbAttrs, getUserAttrs, []attribute.KeyValue{
+		pgxOperationQuery, PGXStatusKey.String("OK"),
+	}), point.Attributes)
+	s.Len(s.logs.messages(), n)
+}
+
+func (s *DBTracerSuite) query(tracer Tracer, sql string, err error) {
+	ctx := tracer.TraceQueryStart(s.ctx, nil, pgx.TraceQueryStartData{SQL: sql, Args: []any{1}})
+	tracer.TraceQueryEnd(ctx, nil, pgx.TraceQueryEndData{Err: err})
+}
+
+func (s *DBTracerSuite) spansNamed(name string) []sdktrace.ReadOnlySpan {
+	var spans []sdktrace.ReadOnlySpan
+	for _, span := range s.spans.Ended() {
+		if span.Name() == name {
+			spans = append(spans, span)
 		}
 	}
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey])
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey])
-	s.Equal("query", attrMap[PGXOperationTypeKey])
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey])
-	s.Equal(semconv.DBSystemPostgreSQL.Value.AsString(), attrMap[semconv.DBSystemKey])
+
+	return spans
 }
 
-func (s *DBTracerSuite) TestTracePrepareStart() {
-	// Create tracer with appendQueryNameToSpan enabled
-	tracer, err := NewDBTracer(
-		s.defaultDBName,
-		WithTraceProvider(s.tracerProvider),
-		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog()),
-		WithLogger(s.logger),
-	)
-	s.Require().NoError(err)
-
-	stmtName := "get_user_by_id"
-
-	ctx := tracer.TracePrepareStart(s.ctx, s.pgxConn, pgx.TracePrepareStartData{
-		Name: stmtName,
-		SQL:  s.defaultQuerySQL.statement,
-	})
-
-	s.NotNil(ctx)
-	prepareData := ctx.Value(dbTracerPrepareCtxKey).(*tracePrepareData)
-	s.NotNil(prepareData)
-	s.Equal(s.defaultQuerySQL.statement, prepareData.sql)
-	s.Equal(s.defaultQuerySQL.name, prepareData.qMD.name)
-
-	tracer.TracePrepareEnd(ctx, s.pgxConn, pgx.TracePrepareEndData{
-		AlreadyPrepared: false,
-		Err:             nil,
-	})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.prepare", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	attrs := span.Attributes()
-	attrMap := s.attributesToMap(attrs)
-
-	s.Equal("prepare", attrMap[PGXOperationTypeKey].AsString())
-	s.Equal(stmtName, attrMap[PGXPrepareStmtNameKey].AsString())
-	s.Equal(s.defaultQuerySQL.name, attrMap[SQLCQueryNameKey].AsString())
-	s.Equal(s.defaultQuerySQL.command, attrMap[SQLCQueryCommandKey].AsString())
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-}
-
-func (s *DBTracerSuite) TestTraceBatchQuery() {
-	// Create tracer with appendQueryNameToSpan enabled
-	tracer, err := NewDBTracer(
-		s.defaultDBName,
-		WithTraceProvider(s.tracerProvider),
-		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog()),
-		WithLogger(s.logger),
-	)
-	s.Require().NoError(err)
-
-	ctx := tracer.TraceBatchStart(s.ctx, s.pgxConn, pgx.TraceBatchStartData{})
-
-	tracer.TraceBatchQuery(ctx, s.pgxConn, pgx.TraceBatchQueryData{
-		SQL:        s.defaultQuerySQL.statement,
-		Args:       []any{1},
-		CommandTag: pgconn.CommandTag{},
-	})
-
-	tracer.TraceBatchEnd(ctx, s.pgxConn, pgx.TraceBatchEndData{})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-	span := spans[0]
-	s.Equal("postgresql.batch", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	attrs := span.Attributes()
-	attrMap := s.attributesToMap(attrs)
-
-	s.Equal("batch", attrMap[PGXOperationTypeKey].AsString())
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-}
-
-func (s *DBTracerSuite) TestTraceAcquire() {
-	tracer, err := NewDBTracer(
-		s.defaultDBName,
-		WithTraceProvider(s.tracerProvider),
-		WithMeterProvider(s.meterProvider),
-		WithShouldLog(s.shouldLog()),
-		WithLogger(s.logger),
-	)
-	s.Require().NoError(err)
-
-	ctx := tracer.TraceAcquireStart(s.ctx, s.pgxPool, pgxpool.TraceAcquireStartData{})
-	tracer.TraceAcquireEnd(ctx, s.pgxPool, pgxpool.TraceAcquireEndData{Conn: s.pgxConn, Err: nil})
-
-	spans := s.spanRecorder.Ended()
-	s.Require().Len(spans, 1)
-
-	span := spans[0]
-	s.Equal("pgxpool.acquire", span.Name())
-	s.Equal(codes.Ok, span.Status().Code)
-
-	attrs := span.Attributes()
-	s.Len(attrs, 3)
-
-	attrMap := s.attributesToMap(attrs)
-
-	s.Equal("acquire", attrMap[PGXPoolConnOperationKey].AsString())
-	s.Equal(s.defaultDBName, attrMap[semconv.DBNamespaceKey].AsString())
-	s.Equal(semconv.DBSystemPostgreSQL.Value, attrMap[semconv.DBSystemKey])
-}
-
-func (s *DBTracerSuite) attributesToMap(attrs []attribute.KeyValue) map[attribute.Key]attribute.Value {
-	attrMap := make(map[attribute.Key]attribute.Value)
-	for _, attr := range attrs {
-		attrMap[attr.Key] = attr.Value
-	}
-
-	return attrMap
-}
-
-func (s *DBTracerSuite) EqualAttributeSet(expected, actual attribute.Set, msgAndArgs ...any) bool {
+func (s *DBTracerSuite) requireSpan(name string) sdktrace.ReadOnlySpan {
 	s.T().Helper()
 
-	if !expected.Equals(&actual) {
-		encoder := attribute.DefaultEncoder()
+	spans := s.spansNamed(name)
+	s.Require().Len(spans, 1, "spans named %q in %v", name, spanNames(s.spans.Ended()))
 
-		expectedStr := expected.Encoded(encoder)
-		actualStr := actual.Encoded(encoder)
+	return spans[0]
+}
 
-		return assert.Fail(s.T(), fmt.Sprintf("Not equal: \n"+
-			"expected: %s\n"+
-			"actual  : %s%s", expectedStr, actualStr, diffString(expectedStr, actualStr)),
-			msgAndArgs...)
+func (s *DBTracerSuite) collect() []metricdata.Metrics {
+	s.T().Helper()
+
+	var rm metricdata.ResourceMetrics
+	s.Require().NoError(s.metrics.Collect(s.ctx, &rm))
+
+	var metrics []metricdata.Metrics
+	for _, sm := range rm.ScopeMetrics {
+		metrics = append(metrics, sm.Metrics...)
 	}
 
-	return true
+	return metrics
 }
 
-func diffString(expected, actual string) string {
+func (s *DBTracerSuite) requireMetric(name string) metricdata.Metrics {
+	s.T().Helper()
 
-	var e, a string
+	for _, m := range s.collect() {
+		if m.Name == name {
+			return m
+		}
+	}
+	s.FailNow("metric not found", name)
 
-	e = reflect.ValueOf(expected).String()
-	a = reflect.ValueOf(actual).String()
+	return metricdata.Metrics{}
+}
 
-	diff, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
-		A:        difflib.SplitLines(e),
-		B:        difflib.SplitLines(a),
-		FromFile: "Expected",
-		FromDate: "",
-		ToFile:   "Actual",
-		ToDate:   "",
-		Context:  1,
+func (s *DBTracerSuite) histogramPoints(name string) []metricdata.HistogramDataPoint[float64] {
+	for _, m := range s.collect() {
+		if hist, ok := m.Data.(metricdata.Histogram[float64]); ok && m.Name == name {
+			points := hist.DataPoints
+			sort.Slice(points, func(i, j int) bool { return statusOf(points[i].Attributes) < statusOf(points[j].Attributes) })
+			return points
+		}
+	}
+
+	return nil
+}
+
+func statusOf(attrs attribute.Set) string {
+	v, _ := attrs.Value(PGXStatusKey)
+	return v.AsString()
+}
+
+func (s *DBTracerSuite) requireHistogramPoint(name string) metricdata.HistogramDataPoint[float64] {
+	s.T().Helper()
+
+	points := s.histogramPoints(name)
+	s.Require().Len(points, 1, "points of %q", name)
+
+	return points[0]
+}
+
+func (s *DBTracerSuite) counterPoints(name string) []metricdata.DataPoint[int64] {
+	s.T().Helper()
+
+	sum, ok := s.requireMetric(name).Data.(metricdata.Sum[int64])
+	s.Require().True(ok, "%q is not an int64 sum", name)
+	points := sum.DataPoints
+	sort.Slice(points, func(i, j int) bool { return statusOf(points[i].Attributes) < statusOf(points[j].Attributes) })
+
+	return points
+}
+
+func (s *DBTracerSuite) requireCounterPoint(name string) metricdata.DataPoint[int64] {
+	s.T().Helper()
+
+	points := s.counterPoints(name)
+	s.Require().Len(points, 1, "points of %q", name)
+
+	return points[0]
+}
+
+func (s *DBTracerSuite) assertAttributes(expected []attribute.KeyValue, actual attribute.Set) {
+	s.T().Helper()
+
+	encoder := attribute.DefaultEncoder()
+	want := attribute.NewSet(expected...)
+	s.Equal(want.Encoded(encoder), actual.Encoded(encoder))
+}
+
+type logRecorder struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *logRecorder) Enabled(context.Context, slog.Level) bool { return true }
+func (h *logRecorder) WithAttrs([]slog.Attr) slog.Handler       { return h }
+func (h *logRecorder) WithGroup(string) slog.Handler            { return h }
+
+func (h *logRecorder) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r.Clone())
+
+	return nil
+}
+
+func (h *logRecorder) messages() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	var messages []string
+	for _, r := range h.records {
+		messages = append(messages, r.Message)
+	}
+
+	return messages
+}
+
+func (h *logRecorder) requireOne(t *testing.T) slog.Record {
+	t.Helper()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if len(h.records) != 1 {
+		t.Fatalf("want 1 log record, got %d", len(h.records))
+	}
+
+	return h.records[0]
+}
+
+func logAttr(r slog.Record, key string) any {
+	var value any
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key != key {
+			return true
+		}
+		value = a.Value.Any()
+		return false
 	})
 
-	return "\n\nDiff:\n" + diff
+	return value
 }
+
+func batchOf(sqls ...string) *pgx.Batch {
+	batch := &pgx.Batch{}
+	for _, sql := range sqls {
+		batch.Queue(sql)
+	}
+
+	return batch
+}
+
+func spanNames(spans []sdktrace.ReadOnlySpan) []string {
+	names := make([]string, 0, len(spans))
+	for _, span := range spans {
+		names = append(names, span.Name())
+	}
+
+	return names
+}
+
+func concat(groups ...[]attribute.KeyValue) []attribute.KeyValue {
+	var all []attribute.KeyValue
+	for _, g := range groups {
+		all = append(all, g...)
+	}
+
+	return all
+}
+
+func errorsOnly(err error) bool { return err != nil }
+
+func ptr[T any](v T) *T { return &v }
