@@ -56,8 +56,8 @@ func (dt *dbTracer) TraceQueryStart(
 }
 
 func (dt *dbTracer) TraceQueryEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceQueryEndData) {
-	traceData := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerQueryCtxKey).(*traceQueryData)
+	if !ok || traceData == nil {
 		return
 	}
 

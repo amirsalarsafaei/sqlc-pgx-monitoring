@@ -76,8 +76,8 @@ func (dt *dbTracer) TraceBatchStart(ctx context.Context, _ *pgx.Conn, batch pgx.
 }
 
 func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchQueryData) {
-	traceData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if !ok || traceData == nil {
 		return
 	}
 
@@ -116,8 +116,8 @@ func (dt *dbTracer) TraceBatchQuery(ctx context.Context, conn *pgx.Conn, data pg
 }
 
 func (dt *dbTracer) TraceBatchEnd(ctx context.Context, conn *pgx.Conn, data pgx.TraceBatchEndData) {
-	traceData := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerBatchCtxKey).(*traceBatchData)
+	if !ok || traceData == nil {
 		return
 	}
 

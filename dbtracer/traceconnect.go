@@ -31,8 +31,8 @@ func (dt *dbTracer) TraceConnectStart(ctx context.Context, data pgx.TraceConnect
 }
 
 func (dt *dbTracer) TraceConnectEnd(ctx context.Context, data pgx.TraceConnectEndData) {
-	traceData := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
-	if traceData == nil {
+	traceData, ok := ctx.Value(dbTracerConnectCtxKey).(*traceConnectData)
+	if !ok || traceData == nil {
 		return
 	}
 
