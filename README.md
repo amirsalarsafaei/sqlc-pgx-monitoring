@@ -197,12 +197,19 @@ This will automatically expose the following OpenTelemetry metrics:
 - `pgx.pool.waited_for_acquires` - Acquisitions that had to wait
 - `pgx.pool.connections.created` - Total connections created
 - `pgx.pool.connections.destroyed` - Total connections destroyed (with reason)
-- `pgx.pool.acquire.duration` - Time spent acquiring connections
-- `pgx.pool.acquire.wait.duration` - Time spent waiting for available connections
+- `pgx.pool.acquire.duration` - Cumulative time spent acquiring connections
+- `pgx.pool.acquire.wait.duration` - Cumulative time spent waiting for available connections
 
 The tracer itself records `db.client.operation.duration` for every query, prepare, batch, copy_from and connect,
 labeled with `pgx.operation.type`, `pgx.status` and the sqlc query name and command, plus
 `pgx.pool.trace.acquire.duration`, `pgx.pool.trace.acquire.count` and `pgx.pool.trace.release.count` for pool hooks.
+
+The pool status durations are running totals, so they only give a mean. For acquire tail latency use
+`pgx.pool.trace.acquire.duration`, a histogram with one sample per acquire:
+
+```promql
+histogram_quantile(0.99, sum by (le) (rate(pgx_pool_trace_acquire_duration_seconds_bucket[5m])))
+```
 
 ## Verifying end to end
 
