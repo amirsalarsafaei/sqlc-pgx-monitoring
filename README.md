@@ -54,7 +54,7 @@ go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@latest
 This will install the latest released version. You can also specify a particular version if needed:
 
 ```shell
-go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.7.1
+go get github.com/amirsalarsafaei/sqlc-pgx-monitoring@v1.8.0
 ```
 
 ## Usage
@@ -72,17 +72,21 @@ To begin using `sqlc-pgx-monitoring` in your Go project, follow these basic step
    ### pgx.Conn
 
    ```go
-   connConfig.Tracer = dbtracer.NewDBTracer(
-      "database_name",
-   )
+   tracer, err := dbtracer.NewDBTracer("database_name")
+   if err != nil {
+       return err
+   }
+   connConfig.Tracer = tracer
    ```
 
    ### pgxpool.Pool
 
    ```go
-   poolConfig.ConnConfig.Tracer = dbtracer.NewDBTracer(
-      "database_name",
-   )
+   tracer, err := dbtracer.NewDBTracer("database_name")
+   if err != nil {
+       return err
+   }
+   poolConfig.ConnConfig.Tracer = tracer // pgxpool also picks up the acquire and release hooks
    ```
 
 ### Available Options
@@ -100,12 +104,13 @@ The `NewDBTracer` function accepts various options to customize its behavior:
 
 - `WithMeterProvider(mp metric.MeterProvider)`: Sets the OpenTelemetry meter provider for metrics
 - `WithTraceProvider(tp trace.TracerProvider)`: Sets the OpenTelemetry tracer provider
-- `WithIncludeSQLText(enabled bool)`: Adds the full SQL statement to spans as the `db.query.text` attribute
+- `WithIncludeSQLText(enabled bool)`: Adds the SQL statement to query, prepare and batch query spans as the `db.query.text` attribute
 - `WithIncludeSpanNameSuffix(enabled bool)`: Appends the sqlc operation name to span names, so they read
   `postgresql.query GetUser`, `postgresql.batch GetUser`, and `postgresql.batch.query GetUser` instead of the
   generic `postgresql.query` / `postgresql.batch`. This makes queries and batches easy to tell apart when
   scrolling through spans in tools like Grafana or Jaeger.
-- `WithLatencyHistogramConfig(name, unit, description string)`: Configures the latency histogram properties
+- `WithLatencyHistogramConfig(name, unit, description string, bucketBoundaries ...float64)`: Configures the latency
+  histogram. Boundaries are in the histogram unit and replace the defaults when given.
   ```go
   dbtracer.NewDBTracer(
       "database_name",
@@ -113,6 +118,7 @@ The `NewDBTracer` function accepts various options to customize its behavior:
           "custom_histogram_name",
           "ms",
           "Custom histogram description",
+          1, 5, 10, 50, 100, 500,
       ),
   )
   ```
@@ -124,7 +130,7 @@ logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 mp := metric.NewMeterProvider()
 tp := trace.NewTracerProvider()
 
-tracer := dbtracer.NewDBTracer(
+tracer, err := dbtracer.NewDBTracer(
     "database_name",
     dbtracer.WithLogger(logger),
     dbtracer.WithMeterProvider(mp),
@@ -137,7 +143,9 @@ tracer := dbtracer.NewDBTracer(
 )
 ```
 
-For more information refer to the [example](examples) directory, which includes Docker migration instructions and a complete monitoring setup.
+Metrics and logs do not depend on tracing: they are recorded even when the tracer provider does not record spans.
+
+For a runnable setup refer to the [examples](examples) directory and [Verifying end to end](#verifying-end-to-end).
 
 ### Pool Status Monitoring
 
@@ -182,7 +190,7 @@ err = poolstatus.Register(pool,
 This will automatically expose the following OpenTelemetry metrics:
 
 - `db.client.connections.usage` - Current connection usage (active/idle)
-- `db.client.connections.max` - Maximum number of connections
+- `db.client.connection.max` - Maximum number of connections
 - `db.client.connections.pending_requests` - Number of pending connection requests
 - `pgx.pool.acquires` - Total successful connection acquisitions
 - `pgx.pool.canceled_acquires` - Total canceled acquisitions
@@ -191,6 +199,30 @@ This will automatically expose the following OpenTelemetry metrics:
 - `pgx.pool.connections.destroyed` - Total connections destroyed (with reason)
 - `pgx.pool.acquire.duration` - Time spent acquiring connections
 - `pgx.pool.acquire.wait.duration` - Time spent waiting for available connections
+
+The tracer itself records `db.client.operation.duration` for every query, prepare, batch, copy_from and connect,
+labeled with `pgx.operation.type`, `pgx.status` and the sqlc query name and command, plus
+`pgx.pool.trace.acquire.duration`, `pgx.pool.trace.acquire.count` and `pgx.pool.trace.release.count` for pool hooks.
+
+## Verifying end to end
+
+`examples/docker-compose.yml` runs Postgres, a [Grafana LGTM](https://github.com/grafana/docker-otel-lgtm) stack
+(OpenTelemetry Collector, Prometheus, Tempo, Loki, Grafana) and a workload that exercises every signal:
+sqlc `:one`/`:many`/`:exec` queries in a transaction, a unique violation, `:batchexec` and `:batchone` batches,
+a batch that fails midway, `:copyfrom`, raw SQL, an explicit prepare, pool pressure, a canceled acquire and a
+connection with a wrong password.
+
+```shell
+make verify        # docker compose up --build -d in examples/
+make verify-down   # stop and remove the stack
+```
+
+Open http://localhost:3000/d/sqlc-pgx-monitoring. The dashboard shows query, operation and pool metrics,
+Tempo tables of failed spans, batches, slow queries and pool spans, and the tracer logs in Loki, linked to their
+traces. Set `GRAFANA_PORT`, `OTLP_GRPC_PORT` or `OTLP_HTTP_PORT` when the default ports are taken.
+
+`make test-integration` runs the same scenarios against a throwaway Postgres with in-memory exporters;
+Docker must be running.
 
 ### Tracing and Monitoring Visualization
 

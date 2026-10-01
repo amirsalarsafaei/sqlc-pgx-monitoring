@@ -6,71 +6,47 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
-var (
-	pgxPoolConnOperationAcquire = PGXPoolConnOperationKey.String("acquire")
-)
+var pgxPoolConnOperationAcquire = PGXPoolConnOperationKey.String("acquire")
 
 type traceAcquireData struct {
+	span      trace.Span
 	startTime time.Time
 }
 
-// TraceAcquireStart implements Tracer.
-func (dt *dbTracer) TraceAcquireStart(ctx context.Context, pool *pgxpool.Pool, data pgxpool.TraceAcquireStartData) context.Context {
-	ctx, _ = dt.getTracer().Start(ctx, "pgxpool.acquire", trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			dt.infoAttrs...
-		), trace.WithAttributes(pgxPoolConnOperationAcquire))
+func (dt *dbTracer) TraceAcquireStart(ctx context.Context, _ *pgxpool.Pool, _ pgxpool.TraceAcquireStartData) context.Context {
+	ctx, span := dt.startSpan(ctx, "pgxpool.acquire", pgxPoolConnOperationAcquire)
 
 	return context.WithValue(ctx, dbTracerAcquireCtxKey, &traceAcquireData{
+		span:      span,
 		startTime: time.Now(),
 	})
 }
 
-// TraceAcquireEnd implements Tracer.
-func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, pool *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
+func (dt *dbTracer) TraceAcquireEnd(ctx context.Context, _ *pgxpool.Pool, data pgxpool.TraceAcquireEndData) {
 	traceData, ok := ctx.Value(dbTracerAcquireCtxKey).(*traceAcquireData)
 	if !ok || traceData == nil {
 		return
 	}
 
-	span := trace.SpanFromContext(ctx)
-	if  !span.SpanContext().IsValid() {
-		return 
-	}
-	defer span.End()
+	interval := time.Since(traceData.startTime)
+	status := PGXStatusKey.String(pgxStatusFromErr(data.Err))
+	dt.connAcquireCounter.Add(ctx, 1,
+		metric.WithAttributes(dt.infoAttrs...),
+		metric.WithAttributes(pgxPoolConnOperationAcquire, status))
+	dt.acquireConnectionHist.Record(ctx, interval.Seconds(),
+		metric.WithAttributes(dt.infoAttrs...),
+		metric.WithAttributes(status))
+	endSpan(traceData.span, data.Err)
 
-	var logAttrs []slog.Attr
-	var level slog.Level
-
-	if data.Err != nil {
-		span.RecordError(data.Err)
-		span.SetStatus(codes.Error, data.Err.Error())
-
-		logAttrs = append(logAttrs, slog.String("error", data.Err.Error()))
-		level = slog.LevelError
-	} else {
-		span.SetStatus(codes.Ok, "")
-		level = slog.LevelInfo
+	if !dt.shouldLog(data.Err) {
+		return
 	}
 
-	dt.connAcquireCounter.Add(ctx, 1, metric.WithAttributes(
-		pgxPoolConnOperationAcquire,
-	))
-
-	dt.acquireConnectionHist.Record(ctx, time.Since(traceData.startTime).Seconds(), 
-		metric.WithAttributes(dt.infoAttrs...))
-
-	if dt.shouldLog(data.Err) {
-		logAttrs = append(logAttrs, slog.Uint64("pid", uint64(extractConnectionID(data.Conn))))
-
-		dt.logger.LogAttrs(ctx, level,
-			"acquire connection",
-			logAttrs...,
-		)
-	}
+	dt.log(ctx, "acquire connection", data.Err,
+		slog.Uint64("pid", uint64(extractConnectionID(data.Conn))),
+	)
 }

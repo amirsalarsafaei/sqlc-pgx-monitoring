@@ -3,69 +3,54 @@ package db
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/amirsalarsafaei/sqlc-pgx-monitoring/dbtracer"
 )
 
-type DBConfig struct {
-	User string
-	Pwd  string
-	Host string
-	Port string
-	Name string
+type Config struct {
+	User     string
+	Password string
+	Host     string
+	Port     string
+	Name     string
 }
 
-func GetConnectionPool(ctx context.Context, dbConf DBConfig, opts ...dbtracer.Option) (*pgxpool.Pool, error) {
-	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
-	)
-	poolConfig, err := pgxpool.ParseConfig(pgURL)
+func (c Config) ConnString() string {
+	u := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.User, c.Password),
+		Host:     net.JoinHostPort(c.Host, c.Port),
+		Path:     c.Name,
+		RawQuery: "sslmode=disable",
+	}
+
+	return u.String()
+}
+
+func NewPool(ctx context.Context, connString string, tracer dbtracer.Tracer, configure ...func(*pgxpool.Config)) (*pgxpool.Pool, error) {
+	poolConfig, err := pgxpool.ParseConfig(connString)
 	if err != nil {
 		return nil, fmt.Errorf("parsing postgres URI: %w", err)
 	}
 
-	tracer, err := dbtracer.NewDBTracer(
-		"postgres",
-		opts...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("creating tracer: %w", err)
-	}
-
 	poolConfig.ConnConfig.Tracer = tracer
+	for _, c := range configure {
+		c(poolConfig)
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating pool: %w", err)
 	}
 
-	return pool, pool.Ping(ctx)
-}
-
-func GetConnection(ctx context.Context, dbConf DBConfig, opts ...dbtracer.Option) (*pgx.Conn, error) {
-	pgURL := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable",
-		dbConf.User, dbConf.Pwd, dbConf.Host, dbConf.Port, dbConf.Name,
-	)
-	connConfig, err := pgx.ParseConfig(pgURL)
-	if err != nil {
-		return nil, fmt.Errorf("parsing postgres URI: %v", err.Error())
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("pinging postgres: %w", err)
 	}
 
-	connConfig.Tracer, err = dbtracer.NewDBTracer(
-		"postgres",
-		opts...,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("creating tracer: %w", err)
-	}
-
-	conn, err := pgx.ConnectConfig(ctx, connConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	return conn, conn.Ping(ctx)
+	return pool, nil
 }

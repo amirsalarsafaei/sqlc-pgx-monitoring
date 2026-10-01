@@ -9,22 +9,24 @@ import (
 
 type ShouldLog func(err error) bool
 
+type latencyHistogramConfig struct {
+	name             string
+	unit             string
+	description      string
+	bucketBoundaries []float64
+}
+
 type optionCtx struct {
 	name                   string
 	shouldLog              ShouldLog
 	meterProvider          metric.MeterProvider
 	traceProvider          trace.TracerProvider
-	latencyHistogramConfig struct {
-		name             string
-		unit             string
-		description      string
-		bucketBoundaries []float64
-	}
-	logger                *slog.Logger
-	logArgs               bool
-	logArgsLenLimit       int
-	includeSQLText        bool
-	includeSpanNameSuffix bool
+	latencyHistogramConfig latencyHistogramConfig
+	logger                 *slog.Logger
+	logArgs                bool
+	logArgsLenLimit        int
+	includeSQLText         bool
+	includeSpanNameSuffix  bool
 }
 
 type Option func(*optionCtx)

@@ -1,2 +1,2082 @@
-{"title":"SQLC-PGX Monitoring Dashboard","uid":"sqlc-pgx-monitoring","editable":true,"fiscalYearStartMonth":0,"graphTooltip":0,"liveNow":false,"timezone":"","id":null,"style":"dark","schemaVersion":38,"templating":{"list":[]},"timepicker":{},"weekStart":"","version":0,"panels":[{"datasource":{"uid":"prometheus","type":"prometheus"},"id":1,"fieldConfig":{"overrides":[],"defaults":{"mappings":[],"unit":"ms","color":{"mode":"palette-classic"},"custom":{"axisCenteredZero":false,"axisColorMode":"text","axisLabel":"","axisPlacement":"auto","barAlignment":0,"drawStyle":"line","fillOpacity":10,"gradientMode":"none","hideFrom":{"vis":false,"legend":false,"tooltip":false},"lineInterpolation":"linear","lineWidth":1,"pointSize":5,"scaleDistribution":{"type":"linear"},"showPoints":"never","spanNulls":false,"stacking":{"mode":"none","group":"A"},"thresholdsStyle":{"mode":"off"}},"thresholds":{"steps":[{"value":null,"color":"green"},{"value":80,"color":"red"}],"mode":"absolute"}}},"gridPos":{"x":0,"y":0,"h":8,"w":12},"options":{"tooltip":{"sort":"none","mode":"single"},"legend":{"displayMode":"list","placement":"bottom","showLegend":true,"calcs":[]}},"title":"Database Operation Duration Percentiles","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"{{db_operation}} (95th percentile)","refId":"A","expr":"histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket[5m])) by (le, db_operation))","format":"time_series"},{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"{{db_operation}} (50th percentile)","refId":"B","expr":"histogram_quantile(0.50, sum(rate(db_client_operation_duration_bucket[5m])) by (le, db_operation))","format":"time_series"}],"type":"timeseries"},{"datasource":{"uid":"prometheus","type":"prometheus"},"id":2,"fieldConfig":{"overrides":[],"defaults":{"mappings":[],"unit":"reqps","color":{"mode":"palette-classic"},"custom":{"axisCenteredZero":false,"axisColorMode":"text","axisLabel":"","axisPlacement":"auto","barAlignment":0,"drawStyle":"line","fillOpacity":10,"gradientMode":"none","hideFrom":{"vis":false,"legend":false,"tooltip":false},"lineInterpolation":"linear","lineWidth":1,"pointSize":5,"scaleDistribution":{"type":"linear"},"showPoints":"never","spanNulls":false,"stacking":{"mode":"none","group":"A"},"thresholdsStyle":{"mode":"off"}},"thresholds":{"steps":[{"value":null,"color":"green"},{"value":80,"color":"red"}],"mode":"absolute"}}},"gridPos":{"x":12,"y":0,"h":8,"w":12},"options":{"tooltip":{"sort":"none","mode":"single"},"legend":{"displayMode":"list","placement":"bottom","showLegend":true,"calcs":[]}},"title":"Database Operations Rate","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"{{db_operation}}","refId":"A","expr":"sum(rate(db_client_operation_duration_count[5m])) by (db_operation)","format":"time_series"}],"type":"timeseries"},{"datasource":{"uid":"prometheus","type":"prometheus"},"gridPos":{"x":0,"y":8,"h":8,"w":8},"options":{"showThresholdLabels":false,"orientation":"auto","reduceOptions":{"values":false,"fields":"","calcs":["lastNotNull"]},"showThresholdMarkers":true},"id":3,"fieldConfig":{"overrides":[],"defaults":{"mappings":[],"color":{"mode":"thresholds"},"thresholds":{"steps":[{"value":null,"color":"green"},{"value":80,"color":"red"}],"mode":"absolute"}}},"title":"Active Database Connections","pluginVersion":"10.0.0","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"Active Connections","refId":"A","expr":"sum(db_client_connections_active)","format":"time_series"}],"type":"gauge"},{"datasource":{"uid":"prometheus","type":"prometheus"},"id":4,"fieldConfig":{"overrides":[],"defaults":{"color":{"mode":"palette-classic"},"custom":{"hideFrom":{"vis":false,"legend":false,"tooltip":false}},"mappings":[]}},"gridPos":{"x":8,"y":8,"h":8,"w":8},"options":{"pieType":"pie","tooltip":{"sort":"none","mode":"single"},"reduceOptions":{"values":false,"fields":"","calcs":["lastNotNull"]},"legend":{"displayMode":"visible","placement":"bottom","showLegend":true}},"title":"Query Distribution (Last Hour)","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"{{db_operation}}","refId":"A","expr":"sum by (db_operation) (increase(db_client_operation_duration_count[1h]))","format":"time_series"}],"type":"piechart"},{"datasource":{"uid":"prometheus","type":"prometheus"},"gridPos":{"x":16,"y":8,"h":8,"w":8},"options":{"showThresholdLabels":false,"orientation":"auto","reduceOptions":{"values":false,"fields":"","calcs":["lastNotNull"]},"showThresholdMarkers":true},"id":5,"fieldConfig":{"overrides":[],"defaults":{"unit":"percent","mappings":[],"color":{"mode":"thresholds"},"thresholds":{"steps":[{"value":null,"color":"green"},{"value":10,"color":"yellow"},{"value":50,"color":"red"}],"mode":"absolute"}}},"title":"Database Error Rate","pluginVersion":"10.0.0","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"Error Rate","refId":"A","expr":"(sum(rate(db_client_operation_duration_count{db_sql_status!="OK"}[5m])) / sum(rate(db_client_operation_duration_count[5m]))) * 100","format":"time_series"}],"type":"gauge"},{"datasource":{"uid":"prometheus","type":"prometheus"},"id":6,"fieldConfig":{"overrides":[],"defaults":{"mappings":[],"color":{"mode":"palette-classic"},"custom":{"axisCenteredZero":false,"axisColorMode":"text","axisLabel":"","axisPlacement":"auto","barAlignment":0,"drawStyle":"line","fillOpacity":10,"gradientMode":"none","hideFrom":{"vis":false,"legend":false,"tooltip":false},"lineInterpolation":"linear","lineWidth":1,"pointSize":5,"scaleDistribution":{"type":"linear"},"showPoints":"never","spanNulls":false,"stacking":{"mode":"none","group":"A"},"thresholdsStyle":{"mode":"off"}},"thresholds":{"steps":[{"value":null,"color":"green"},{"value":80,"color":"red"}],"mode":"absolute"}}},"gridPos":{"x":0,"y":16,"h":8,"w":24},"options":{"tooltip":{"sort":"none","mode":"single"},"legend":{"displayMode":"list","placement":"bottom","showLegend":true,"calcs":[]}},"title":"Connection Pool Status","targets":[{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"Active - {{db_connection_pool_name}}","refId":"A","expr":"sum by (db_connection_pool_name) (db_client_connections_active)","format":"time_series"},{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"Idle - {{db_connection_pool_name}}","refId":"B","expr":"sum by (db_connection_pool_name) (db_client_connections_idle)","format":"time_series"},{"datasource":{"uid":"prometheus","type":"prometheus"},"intervalFactor":1,"legendFormat":"Max - {{db_connection_pool_name}}","refId":"C","expr":"sum by (db_connection_pool_name) (db_client_connections_max)","format":"time_series"}],"type":"timeseries"}],"links":[],"refresh":"5s","tags":["database","postgresql","monitoring","sqlc","pgx"],"annotations":{"list":[{"datasource":{"uid":"grafana","type":"datasource"},"iconColor":"rgba(0, 211, 255, 1)","name":"Annotations & Alerts","type":"dashboard","hide":true,"enable":true,"builtIn":1}]},"time":{"to":"now","from":"now-1h"}}
-
+{
+  "uid": "sqlc-pgx-monitoring",
+  "title": "sqlc-pgx-monitoring",
+  "description": "Traces, metrics and logs emitted by dbtracer and poolstatus.",
+  "tags": [
+    "sqlc",
+    "pgx",
+    "postgresql",
+    "opentelemetry"
+  ],
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 1,
+  "links": [],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "type": "query",
+        "name": "service",
+        "label": "service",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(db_client_operation_duration_seconds_count, service_name)",
+          "refId": "service"
+        },
+        "definition": "label_values(db_client_operation_duration_seconds_count, service_name)",
+        "current": {
+          "text": "sqlc-pgx-monitoring-example",
+          "value": "sqlc-pgx-monitoring-example"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": false,
+        "multi": false,
+        "options": [],
+        "regex": ""
+      },
+      {
+        "type": "query",
+        "name": "db",
+        "label": "database",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(db_client_operation_duration_seconds_count{service_name=\"$service\"}, db_namespace)",
+          "refId": "db"
+        },
+        "definition": "label_values(db_client_operation_duration_seconds_count{service_name=\"$service\"}, db_namespace)",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "regex": ""
+      },
+      {
+        "type": "query",
+        "name": "query",
+        "label": "sqlc query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\"}, sqlc_query_name)",
+          "refId": "query"
+        },
+        "definition": "label_values(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\"}, sqlc_query_name)",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 2,
+        "sort": 1,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "options": [],
+        "regex": ""
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "id": 1,
+      "title": "Overview \u2014 is the database layer serving, failing or slow?",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Operations/s",
+      "description": "Every traced pgx operation (query, prepare, batch, copy_from, connect) per second. Normal: steady with the workload. Action: a drop to 0 means the app stopped talking to Postgres or stopped exporting.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\"}[$__rate_interval]))",
+          "legendFormat": "Operations/s",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 3,
+      "title": "Failed share",
+      "description": "Share of operations whose pgx.status is not OK. The example workload fails on purpose (unique violation, failed batch, wrong password), so a few percent is normal here. Action: find the query in Queries \u2192 Failures.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 4,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",pgx_status!=\"OK\"}[$__rate_interval])) / sum(rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\"}[$__rate_interval]))",
+          "legendFormat": "Failed share",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.1
+              },
+              {
+                "color": "red",
+                "value": 0.25
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Query p95",
+      "description": "95th percentile of postgresql.query duration across all queries. Normal: under 100ms for the example workload (raw-sql sleeps up to 100ms). Action: find the slow query in Queries \u2192 Latency.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\",pgx_operation_type=\"query\"}[$__rate_interval])))",
+          "legendFormat": "Query p95",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 5,
+      "title": "Connections in use",
+      "description": "Connections checked out of the pool now (db.client.connections.usage, state=used). Normal: below the pool max. Action: at max with acquire waits rising, the pool is too small or queries hold connections too long.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(db_client_connections_usage{service_name=\"$service\",state=\"used\"})",
+          "legendFormat": "Connections in use",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 6,
+      "title": "Acquire p95",
+      "description": "95th percentile of time spent in pgxpool Acquire (pgx.pool.trace.acquire.duration). Normal: well under 1ms when idle connections exist. Action: rising with pool pressure means callers queue for connections.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(pgx_pool_trace_acquire_duration_seconds_bucket{service_name=\"$service\"}[$__rate_interval])))",
+          "legendFormat": "Acquire p95",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "id": 7,
+      "title": "Canceled acquires",
+      "description": "Acquires abandoned because the caller's context ended while waiting, over the dashboard range. The example cancels one acquire every 10 rounds. Action: in production any increase means callers time out waiting for the pool.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 20,
+        "y": 1,
+        "w": 4,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(pgx_pool_canceled_acquires_total{service_name=\"$service\"}[$__range]))",
+          "legendFormat": "Canceled acquires",
+          "range": false,
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "row",
+      "id": 8,
+      "title": "Queries \u2014 which sqlc queries are hot, slow or failing?",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 9,
+      "title": "Rate by query",
+      "description": "Operations per second per sqlc query name and pgx operation. Raw SQL without a sqlc header is left out. Normal: each query follows its caller's traffic.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[$__rate_interval]))",
+          "legendFormat": "{{sqlc_query_name}} \u00b7 {{pgx_operation_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "Latency p95 by query",
+      "description": "95th percentile duration per sqlc query (query, prepare and batch operations). Normal: flat lines. Action: a line climbing alone is that query's plan or data; all climbing is the database.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[$__rate_interval])))",
+          "legendFormat": "{{sqlc_query_name}} \u00b7 {{pgx_operation_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 11,
+      "title": "Failures by query and status",
+      "description": "Failed operations per second by sqlc query and pgx.status (the PostgreSQL severity, or UNKNOWN_ERROR for driver errors). The workload's CreateUser and InsertUsers fail with SQLSTATE 23505 by design. Action: open Traces \u2192 Failed operations for the SQLSTATE.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "label_replace(sum by (sqlc_query_name, pgx_operation_type, pgx_status) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",pgx_status!=\"OK\",sqlc_query_name=~\"$query\"}[$__rate_interval])), \"sqlc_query_name\", \"raw SQL\", \"sqlc_query_name\", \"\")",
+          "legendFormat": "{{sqlc_query_name}} \u00b7 {{pgx_operation_type}} \u00b7 {{pgx_status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "table",
+      "id": 12,
+      "title": "Query summary",
+      "description": "One row per sqlc query and operation over the last 5 minutes: rate, latency percentiles and failure share. Sort by a column to find the hottest, slowest or most failing query.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[5m]))",
+          "legendFormat": "",
+          "range": false,
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[5m])))",
+          "legendFormat": "",
+          "range": false,
+          "format": "table",
+          "instant": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[5m])))",
+          "legendFormat": "",
+          "range": false,
+          "format": "table",
+          "instant": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "(sum by (sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\",pgx_status!=\"OK\"}[5m])) or (0 * sum by (sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[5m])))) / sum by (sqlc_query_name, pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\",sqlc_query_name=~\"$query\",sqlc_query_name!=\"\"}[5m]))",
+          "legendFormat": "",
+          "range": false,
+          "format": "table",
+          "instant": true,
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ops/s"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p50"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "p95"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "failed"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percentunit"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "sortBy": [
+          {
+            "displayName": "ops/s",
+            "desc": true
+          }
+        ]
+      },
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "indexByName": {
+              "sqlc_query_name": 0,
+              "pgx_operation_type": 1,
+              "Value #A": 2,
+              "Value #B": 3,
+              "Value #C": 4,
+              "Value #D": 5
+            },
+            "renameByName": {
+              "sqlc_query_name": "query",
+              "pgx_operation_type": "operation",
+              "Value #A": "ops/s",
+              "Value #B": "p50",
+              "Value #C": "p95",
+              "Value #D": "failed"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 13,
+      "title": "Operations \u2014 how each pgx operation type behaves",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 14,
+      "title": "Rate by operation",
+      "description": "Operations per second by pgx.operation.type. prepare follows new statements on new connections; connect follows pool churn. Normal: query dominates.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (pgx_operation_type) (rate(db_client_operation_duration_seconds_count{service_name=\"$service\",db_namespace=~\"$db\"}[$__rate_interval]))",
+          "legendFormat": "{{pgx_operation_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 15,
+      "title": "Latency p95 by operation",
+      "description": "95th percentile duration by pgx.operation.type, raw SQL included. Normal: connect is the slowest (TCP, auth); query and batch track the workload.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.95, sum by (le, pgx_operation_type) (rate(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\"}[$__rate_interval])))",
+          "legendFormat": "{{pgx_operation_type}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "heatmap",
+      "id": 16,
+      "title": "Query latency distribution",
+      "description": "postgresql.query operations per latency bucket. Two bands are two code paths; a band drifting up is the population slowing. The example's raw-sql sleeps spread 0\u2013100ms.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 23,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (le) (increase(db_client_operation_duration_seconds_bucket{service_name=\"$service\",db_namespace=~\"$db\",pgx_operation_type=\"query\"}[$__interval]))",
+          "legendFormat": "{{le}}",
+          "range": true,
+          "format": "heatmap",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "calculate": false,
+        "yAxis": {
+          "unit": "s"
+        },
+        "cellGap": 1,
+        "color": {
+          "mode": "scheme",
+          "scheme": "Oranges",
+          "steps": 64
+        },
+        "tooltip": {
+          "mode": "single",
+          "yHistogram": true
+        },
+        "legend": {
+          "show": true
+        },
+        "rowsFrame": {
+          "layout": "auto"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 17,
+      "title": "Pool \u2014 is the pool sized right?",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 18,
+      "title": "Connections",
+      "description": "Pool connections by state with the configured max (poolstatus). Normal: used well below max, idle above zero. Action: used pinned at max means acquires queue.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (state) (db_client_connections_usage{service_name=\"$service\"})",
+          "legendFormat": "{{state}}",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(db_client_connection_max{service_name=\"$service\"})",
+          "legendFormat": "max",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(db_client_connections_pending_requests{service_name=\"$service\"})",
+          "legendFormat": "constructing",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "max"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 19,
+      "title": "Acquire and release",
+      "description": "Connections acquired and released per second, from the tracer hooks (pgx.pool.trace.*) and from pool statistics (pgx.pool.acquires). Normal: all three overlap; acquires above releases means connections leak.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 32,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(pgx_pool_trace_acquire_count_total{service_name=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "acquire (trace)",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(pgx_pool_trace_release_count_total{service_name=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "release (trace)",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(pgx_pool_acquires_total{service_name=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "acquire (pool stat)",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 20,
+      "title": "Acquire latency",
+      "description": "Time to acquire a connection: percentiles from the tracer histogram and the mean from pool statistics. Normal: microseconds. Action: p99 jumping with waited acquires means the pool is exhausted.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 32,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(pgx_pool_trace_acquire_duration_seconds_bucket{service_name=\"$service\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(pgx_pool_trace_acquire_duration_seconds_bucket{service_name=\"$service\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true,
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(pgx_pool_acquire_duration_seconds_total{service_name=\"$service\"}[$__rate_interval])) / sum(rate(pgx_pool_acquires_total{service_name=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "mean (pool stat)",
+          "range": true,
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 21,
+      "title": "Waited and canceled acquires",
+      "description": "Acquires per interval that found the pool empty and waited, and those the caller gave up on. The example forces both: pool-pressure every 15 rounds, canceled-acquire every 10. Action: sustained waits mean raise MaxConns or shorten queries.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(pgx_pool_waited_for_acquires_total{service_name=\"$service\"}[$__interval]))",
+          "legendFormat": "waited",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(pgx_pool_canceled_acquires_total{service_name=\"$service\"}[$__interval]))",
+          "legendFormat": "canceled",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum",
+            "max"
+          ],
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 22,
+      "title": "Mean wait when the pool is empty",
+      "description": "Mean time an acquire waited for a connection to be released or created, from pgx.pool.acquire.wait.duration / pgx.pool.waited_for_acquires. Normal: no line between pressure bursts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(pgx_pool_acquire_wait_duration_seconds_total{service_name=\"$service\"}[$__rate_interval])) / sum(rate(pgx_pool_waited_for_acquires_total{service_name=\"$service\"}[$__rate_interval]))",
+          "legendFormat": "mean wait",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 1,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ],
+          "sortBy": "Mean",
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "id": 23,
+      "title": "Connections created and destroyed",
+      "description": "Connections opened and closed per interval, closures split by reason (lifetime: MaxConnLifetime, idletime: MaxConnIdleTime). The example uses a 1m lifetime and 20s idle time, so churn is constant.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(increase(pgx_pool_connections_created_total{service_name=\"$service\"}[$__interval]))",
+          "legendFormat": "created",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (increase(pgx_pool_connections_destroyed_total{service_name=\"$service\"}[$__interval]))",
+          "legendFormat": "destroyed \u00b7 {{reason}}",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "showPoints": "never",
+            "spanNulls": false,
+            "drawStyle": "bars"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum",
+            "max"
+          ],
+          "sortDesc": true,
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "id": 24,
+      "title": "Traces \u2014 inspect individual operations",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "table",
+      "id": 25,
+      "title": "Failed spans",
+      "description": "Spans from dbtracer with error status: SQLSTATE in db.response.status_code, the error as an exception event. Click a trace to open it in Tempo.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"$service\" && span.db.system=\"postgresql\" && status=error} | select(name, span.db.response.status_code, statusMessage)",
+          "limit": 20,
+          "tableType": "spans",
+          "spss": 10,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "span"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SQLSTATE"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "traceService": true,
+              "service.name": true,
+              "db.system": true,
+              "pgx.operation.type": true
+            },
+            "renameByName": {
+              "db.response.status_code": "SQLSTATE",
+              "statusMessage": "error",
+              "db.query.text": "statement"
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Start time": 0,
+              "Name": 1,
+              "SQLSTATE": 2,
+              "error": 3,
+              "Duration": 4,
+              "Trace Name": 5,
+              "Span ID": 6
+            },
+            "renameByName": {
+              "Name": "span",
+              "Trace Name": "trace"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 26,
+      "title": "Batches",
+      "description": "Batch traces: one postgresql.batch span with a postgresql.batch.query child per queued query; expand a row for its spans. A failed batch still ends every child; children pgx never reported carry the batch error.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 49,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"$service\" && span.pgx.operation.type=~\"batch|batch.query\"} | select(name, status)",
+          "limit": 20,
+          "tableType": "traces",
+          "spss": 10,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "type": "table",
+      "id": 27,
+      "title": "Slow queries",
+      "description": "postgresql.query spans slower than 50ms. With WithIncludeSQLText the statement is in db.query.text.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"$service\" && span.pgx.operation.type=\"query\" && duration > 50ms} | select(name, span.db.query.text)",
+          "limit": 20,
+          "tableType": "spans",
+          "spss": 10,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "span"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SQLSTATE"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "traceService": true,
+              "service.name": true,
+              "db.system": true,
+              "pgx.operation.type": true
+            },
+            "renameByName": {
+              "db.response.status_code": "SQLSTATE",
+              "statusMessage": "error",
+              "db.query.text": "statement"
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Start time": 0,
+              "Name": 1,
+              "statement": 2,
+              "Duration": 3,
+              "Trace Name": 4,
+              "Span ID": 5
+            },
+            "renameByName": {
+              "Name": "span",
+              "Trace Name": "trace"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "table",
+      "id": 28,
+      "title": "Pool acquires and connects",
+      "description": "pgxpool.acquire and postgresql.connect spans. A connect nested in an acquire is the pool creating a connection on demand.",
+      "datasource": {
+        "type": "tempo",
+        "uid": "tempo"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 58,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "tempo"
+          },
+          "queryType": "traceql",
+          "query": "{resource.service.name=\"$service\" && (name=\"pgxpool.acquire\" || name=\"postgresql.connect\")} | select(name, status, statusMessage)",
+          "limit": 20,
+          "tableType": "spans",
+          "spss": 10,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Start time"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 175
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "span"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 250
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Duration"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "SQLSTATE"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 90
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "status"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 70
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "traceService": true,
+              "service.name": true,
+              "db.system": true,
+              "pgx.operation.type": true
+            },
+            "renameByName": {
+              "db.response.status_code": "SQLSTATE",
+              "statusMessage": "error",
+              "db.query.text": "statement"
+            }
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Start time": 0,
+              "Name": 1,
+              "status": 2,
+              "error": 3,
+              "Duration": 4,
+              "Trace Name": 5,
+              "Span ID": 6
+            },
+            "renameByName": {
+              "Name": "span",
+              "Trace Name": "trace"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 29,
+      "title": "Logs \u2014 what the tracer logged",
+      "collapsed": false,
+      "panels": [],
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "type": "logs",
+      "id": 30,
+      "title": "Error logs",
+      "description": "Tracer log records at error level, exported through the otelslog bridge. trace_id links each record to its span.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 68,
+        "w": 24,
+        "h": 8
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_name=\"$service\"} | detected_level=\"error\" | line_format \"{{ __line__ }}{{ with .query_name }} {{ . }}{{ end }}{{ with .statement_name }} {{ . }}{{ end }}{{ with .tableName }} {{ . }}{{ end }}{{ with .error }}: {{ . }}{{ end }}\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    },
+    {
+      "type": "logs",
+      "id": 31,
+      "title": "All logs",
+      "description": "Every tracer log record. The default ShouldLog logs each operation at info; WithShouldLog narrows it.",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 76,
+        "w": 24,
+        "h": 10
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{service_name=\"$service\"} | line_format \"{{ __line__ }}{{ with .query_name }} {{ . }}{{ end }}{{ with .statement_name }} {{ . }}{{ end }}{{ with .tableName }} {{ . }}{{ end }}{{ with .error }}: {{ . }}{{ end }}\"",
+          "queryType": "range",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": false,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ]
+}

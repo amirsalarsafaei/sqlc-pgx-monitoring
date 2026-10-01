@@ -1,5 +1,3 @@
-// Package dbtracer provides a tracer implementation for pgx and pgxpool that integrates with OpenTelemetry.
-// dbtracer parses sqlc generated queries to extract query name and command type for better observability.
 package dbtracer
 
 import (
@@ -34,11 +32,11 @@ type Tracer interface {
 	pgxpool.ReleaseTracer
 }
 
-// dbTracer implements pgx.QueryTracer, pgx.BatchTracer, pgx.ConnectTracer, and pgx.CopyFromTracer
+var _ Tracer = (*dbTracer)(nil)
+
 type dbTracer struct {
 	logger          *slog.Logger
 	shouldLog       ShouldLog
-	databaseName    string
 	logArgs         bool
 	logArgsLenLimit int
 
@@ -72,20 +70,14 @@ func NewDBTracer(
 		meterProvider:   otel.GetMeterProvider(),
 		traceProvider:   otel.GetTracerProvider(),
 		logArgs:         true,
-		logArgsLenLimit: 64,
-		latencyHistogramConfig: struct {
-			name             string
-			unit             string
-			description      string
-			bucketBoundaries []float64
-		}{
+		logArgsLenLimit: defaultLogArgsLenLimit,
+		latencyHistogramConfig: latencyHistogramConfig{
 			description:      semconv.DBClientOperationDurationDescription,
 			unit:             semconv.DBClientOperationDurationUnit,
 			name:             semconv.DBClientOperationDurationName,
 			bucketBoundaries: defaultBucketBoundaries,
 		},
-		logger:         slog.Default(),
-		includeSQLText: false,
+		logger: slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(&optCtx)
@@ -137,7 +129,6 @@ func NewDBTracer(
 
 	return &dbTracer{
 		logger:                optCtx.logger,
-		databaseName:          databaseName,
 		shouldLog:             optCtx.shouldLog,
 		logArgs:               optCtx.logArgs,
 		logArgsLenLimit:       optCtx.logArgsLenLimit,
@@ -165,16 +156,60 @@ const (
 	dbTracerAcquireCtxKey
 )
 
-func (dt *dbTracer) recordSpanError(span trace.Span, err error) {
-	if err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+func (dt *dbTracer) startSpan(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	return dt.getTracer().Start(ctx, name,
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(dt.infoAttrs...),
+		trace.WithAttributes(attrs...),
+	)
+}
 
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) {
-			span.SetAttributes(DBStatusCodeKey.String(pgErr.Code))
-		}
+func sqlcAttributes(qMD *queryMetadata) []attribute.KeyValue {
+	if qMD == nil {
+		return nil
 	}
+
+	return []attribute.KeyValue{
+		SQLCQueryNameKey.String(qMD.name),
+		SQLCQueryCommandKey.String(qMD.command),
+		semconv.DBOperationName(qMD.name),
+	}
+}
+
+func (dt *dbTracer) queryAttributes(qMD *queryMetadata, sql string) []attribute.KeyValue {
+	attrs := sqlcAttributes(qMD)
+	if dt.includeQueryText {
+		attrs = append(attrs, semconv.DBQueryText(sql))
+	}
+
+	return attrs
+}
+
+func endSpan(span trace.Span, err error) {
+	defer span.End()
+
+	if err == nil {
+		span.SetStatus(codes.Ok, "")
+		return
+	}
+
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		span.SetAttributes(DBStatusCodeKey.String(pgErr.Code))
+	}
+}
+
+func (dt *dbTracer) log(ctx context.Context, msg string, err error, attrs ...slog.Attr) {
+	level := slog.LevelInfo
+	if err != nil {
+		level = slog.LevelError
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+
+	dt.logger.LogAttrs(ctx, level, msg, attrs...)
 }
 
 func (dt *dbTracer) recordDBOperationHistogramMetric(ctx context.Context,
@@ -212,12 +247,12 @@ func (dt *dbTracer) logQueryArgs(args []any) []any {
 		return nil
 	}
 
-	logArgs := make([]any, 0, len(args))
 	limit := dt.logArgsLenLimit
-	if limit == 0 {
-		limit = 64 // default limit if not set
+	if limit <= 0 {
+		limit = defaultLogArgsLenLimit
 	}
 
+	logArgs := make([]any, 0, len(args))
 	for _, a := range args {
 		switch v := a.(type) {
 		case []byte:
@@ -250,7 +285,7 @@ func (dt *dbTracer) spanName(operationName string, qMD *queryMetadata) string {
 		return operationName
 	}
 
-	return fmt.Sprintf("%s %s", operationName, qMD.name)
+	return operationName + " " + qMD.name
 }
 
 func (dt *dbTracer) getTracer() trace.Tracer {
@@ -263,9 +298,9 @@ func extractConnectionID(conn *pgx.Conn) uint32 {
 	}
 
 	pgConn := conn.PgConn()
-	if pgConn != nil {
-		pid := pgConn.PID()
-		return pid
+	if pgConn == nil {
+		return 0
 	}
-	return 0
+
+	return pgConn.PID()
 }
